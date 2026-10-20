@@ -253,6 +253,27 @@ def _validate_permutation(perm, n_train, field="epoch_permutation"):
         raise CheckpointError("%s is not a permutation (duplicates)" % field)
 
 
+def _validate_mps_rng_policy(ckpt):
+    device = ckpt.get("device")
+    device_str = "" if device is None else str(device)
+    if "mps" not in device_str.lower():
+        return
+    mps = ckpt.get("mps_rng_state")
+    if mps is None:
+        raise CheckpointError(
+            "checkpoint declares device %r but has no mps_rng_state; an MPS "
+            "checkpoint must carry a nonempty saved MPS RNG state" % (device,)
+        )
+    try:
+        if len(mps) == 0:
+            raise CheckpointError(
+                "checkpoint declares device %r but has an empty mps_rng_state"
+                % (device,)
+            )
+    except TypeError:
+        raise CheckpointError("mps_rng_state has no length")
+
+
 def _validate_rng_fields(ckpt):
     trs = ckpt.get("torch_rng_state")
     if trs is None:
@@ -389,7 +410,29 @@ def validate_current_checkpoint(ckpt, exp):
                 "could not be resumed without an extra shuffle"
             )
         _validate_permutation(perm, exp["n_train"])
+    # Fixed-schedule geometry: in-progress and completed states must satisfy
+    # exact arithmetic; checking only global_step == completed_updates is not
+    # enough.
+    nb = exp["n_batches"]
+    if completed:
+        if gs != (epoch + 1) * nb:
+            raise CheckpointError(
+                "completed checkpoint arithmetic mismatch: global_step %d != "
+                "(epoch+1)*n_batches (%d*%d=%d)" % (gs, epoch, nb, (epoch + 1) * nb)
+            )
+        if cursor != nb:
+            raise CheckpointError(
+                "completed checkpoint must have batch_cursor == n_batches"
+            )
+    else:
+        if gs != epoch * nb + cursor:
+            raise CheckpointError(
+                "in-progress checkpoint arithmetic mismatch: global_step %d != "
+                "epoch*n_batches + batch_cursor (%d*%d+%d=%d)"
+                % (gs, epoch, nb, cursor, epoch * nb + cursor)
+            )
     _validate_rng_fields(ckpt)
+    _validate_mps_rng_policy(ckpt)
     if ckpt.get("config_split_hash") != exp["cfg_hash"]:
         raise CheckpointError("config_split_hash mismatch")
     if ckpt.get("tokenizer_hash") != exp["tok_hash"]:
@@ -453,7 +496,7 @@ def plan_current_resume(view):
 # --------------------------------------------------------------------------
 
 
-def validate_legacy_checkpoint(ckpt, exp, provenance):
+def validate_legacy_checkpoint(ckpt, exp, provenance, checkpoint_sha256=None):
     """Validate a legacy (pre-schema) full checkpoint for a boundary resume.
 
     Legacy format facts (verified against the archived original trainer):
@@ -522,6 +565,41 @@ def validate_legacy_checkpoint(ckpt, exp, provenance):
             "provenance epoch %r does not match checkpoint epoch %r"
             % (provenance.get("epoch"), epoch)
         )
+    # Trusted provenance must bind its claims to the checkpoint bytes via a
+    # SHA-256 over the explicitly selected checkpoint file.
+    hash_aliases = ("checkpoint_sha256", "checkpoint_hash", "sha256", "file_sha256")
+    prov_hash = None
+    for alias in hash_aliases:
+        if isinstance(provenance, dict) and alias in provenance:
+            prov_hash = provenance.get(alias)
+            break
+    if prov_hash is None:
+        raise LegacyCheckpointRefused(
+            "trusted provenance record lacks a checkpoint SHA-256 "
+            "(expected one of %s); a sidecar repeating seed/epoch/step does "
+            "not bind those claims to checkpoint bytes" % ", ".join(hash_aliases)
+        )
+    if checkpoint_sha256 is None:
+        raise LegacyCheckpointRefused(
+            "checkpoint file hash was not provided for verification; refuse "
+            "migration without hashing the selected checkpoint"
+        )
+    if prov_hash != checkpoint_sha256:
+        raise LegacyCheckpointRefused(
+            "checkpoint SHA-256 %r does not match provenance record %r"
+            % (checkpoint_sha256, prov_hash)
+        )
+    # Run-identity evidence beyond the legacy format's missing fields.
+    if isinstance(provenance, dict) and "run_identity" in provenance:
+        if provenance.get("run_identity") != exp["identity"]:
+            raise LegacyCheckpointRefused(
+                "provenance run_identity does not match this run's identity"
+            )
+    if isinstance(provenance, dict) and "run_identity_hash" in provenance:
+        if provenance.get("run_identity_hash") != exp["identity"]["run_identity_hash"]:
+            raise LegacyCheckpointRefused(
+                "provenance run_identity_hash does not match this run's identity"
+            )
     # Epoch-boundary arithmetic under the original fixed 10-batch schedule.
     nb = ORIGINAL_LEGACY_N_BATCHES
     if exp["n_batches"] != nb:
@@ -562,6 +640,7 @@ def validate_legacy_checkpoint(ckpt, exp, provenance):
         )
     try:
         _validate_rng_fields(ckpt)
+        _validate_mps_rng_policy(ckpt)
     except LegacyCheckpointRefused:
         raise
     except CheckpointError as e:
@@ -593,7 +672,7 @@ def validate_legacy_checkpoint(ckpt, exp, provenance):
     }
 
 
-def plan_resume_from_checkpoint(ckpt, exp, provenance):
+def plan_resume_from_checkpoint(ckpt, exp, provenance, checkpoint_sha256=None):
     """Route a loaded checkpoint to the current-schema or legacy path.
 
     schema_version absent/None/1 -> legacy path; anything else must validate
@@ -608,7 +687,9 @@ def plan_resume_from_checkpoint(ckpt, exp, provenance):
             "schema_version must be an int or absent (got %r)" % (sv,)
         )
     if sv is None or sv in LEGACY_SCHEMA_VERSIONS:
-        plan = validate_legacy_checkpoint(ckpt, exp, provenance)
+        plan = validate_legacy_checkpoint(
+            ckpt, exp, provenance, checkpoint_sha256=checkpoint_sha256
+        )
         return plan
     view = validate_current_checkpoint(ckpt, exp)
     return plan_current_resume(view)
@@ -799,7 +880,10 @@ def _epoch_end(state, env, eval_and_log, save_latest):
     performed = False
     if state.epoch >= state.next_eval_epoch:
         eval_and_log(state.epoch, state.global_step)
-        state.next_eval_epoch = next_eval_after(state.next_eval_epoch)
+        # Post-evaluation pointer is anchored to the completed epoch, so a
+        # stale pointer is normalized to beyond it in one bounded step rather
+        # than replaying missed historical epochs.
+        state.next_eval_epoch = next_eval_after(state.epoch)
         performed = True
     if performed and state.unsaved_updates > 0:
         save_latest(

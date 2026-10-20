@@ -239,6 +239,14 @@ def inspect_destination(run_dir, csv_path, latest_path, snap_dir):
     return insp
 
 
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
     """Decide fresh-vs-resume and validate BEFORE any output mutation.
 
@@ -253,7 +261,10 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
         # be generalized to unknown files. Model-only snapshots use restricted
         # loading in evaluate_endpoints.py.
         ckpt = torch.load(latest_path, map_location="cpu", weights_only=False)
-        plan = run_state.plan_resume_from_checkpoint(ckpt, exp, provenance)
+        ckpt_hash = file_sha256(latest_path)
+        plan = run_state.plan_resume_from_checkpoint(
+            ckpt, exp, provenance, checkpoint_sha256=ckpt_hash
+        )
         run_state.validate_resume_destination(insp, plan["global_step"])
         return "resume", plan, insp, ckpt
     run_state.validate_fresh_destination(insp)
@@ -319,6 +330,19 @@ def main():
             "start a new file (previous history is not available here)",
             flush=True,
         )
+
+    # --- target calculation and honest no-op before any output mutation ---
+    if args.segment_steps is not None:
+        _target_steps = min(args.steps, plan["global_step"] + args.segment_steps)
+    else:
+        _target_steps = args.steps
+    if plan["global_step"] >= _target_steps:
+        print(
+            "no-op: global_step %d already >= target %d; nothing was written"
+            % (plan["global_step"], _target_steps),
+            flush=True,
+        )
+        return
 
     # --- outputs are only mutated from here on ---
     os.makedirs(run_dir, exist_ok=True)
@@ -455,8 +479,6 @@ def main():
         skipped at a stop step nor emitted twice. Model-only snapshots keep
         their historical model-only type; no optimizer state is invented.
         """
-        if _stop_requested:
-            return
         gs = state.global_step
         if gs in SNAPSHOT_STEPS:
             sp = os.path.join(snap_dir, "snapshot_step%d.pt" % gs)
@@ -486,15 +508,9 @@ def main():
 
     # Due-but-missing artifacts at the resumed step (e.g. a crash between an
     # update and its snapshot write) are written before any new minibatch.
+    # (Only reached for genuinely continuing runs; completed targets exited
+    # read-only above.)
     write_obligations()
-
-    if state.global_step >= target_steps:
-        print(
-            "no-op: global_step %d already >= target %d; nothing was written"
-            % (state.global_step, target_steps),
-            flush=True,
-        )
-        return
 
     def draw_perm():
         return torch.randperm(n_train)

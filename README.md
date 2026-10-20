@@ -152,6 +152,7 @@ unused `--out` path (the tool refuses to overwrite existing files).
 ## Provenance
 
 - Dataset/model adapted from openai/grok (MIT): https://github.com/openai/grok
+- Upstream license notice retained in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Paper: https://arxiv.org/abs/2201.02177
 
 ## Status

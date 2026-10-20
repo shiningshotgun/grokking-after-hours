@@ -67,6 +67,25 @@ run_identity plus run_identity_hash. The sidecar binds claims to bytes but is
 not itself authenticated; users must supply a trusted record. Missing or
 inconsistent provenance blocks migration rather than being guessed.
 
+Illustrative sidecar schema (placeholders only; not a usable historical
+record and must not be filled with fabricated values):
+
+```json
+{
+  "seed": <int>,
+  "global_step": <int>,
+  "epoch": <int>,
+  "checkpoint_sha256": "<64 lowercase hex digest of the selected checkpoint file>",
+  "run_identity": { "... full canonical identity from the run ..." },
+  "run_identity_hash": "<64 hex recomputed from run_identity>"
+}
+```
+
+Only `checkpoint_sha256` is accepted; `checkpoint_hash`, `sha256`, and
+`file_sha256` are rejected. The digest is verified against the streamed
+file hash before deserialization. Full identity must come from the run's
+trusted configuration/records; if unavailable, migration is refused.
+
 ## Training (reference only; not executed in the correction passes)
 
 The retained `runs/seed{0,1,2}/` directories contain **only** `metrics.csv`

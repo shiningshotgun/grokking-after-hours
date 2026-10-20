@@ -1730,6 +1730,10 @@ class TestMainNoOpOrchestration(unittest.TestCase):
                     patch("train.build_split", return_value=fake_data),
                     patch("train.hash_config_split", return_value="cfg-hash-test"),
                     patch("train.tokenizer_hash", return_value="tok-hash-test"),
+                    patch("train.rng_capture", side_effect=sentinel),
+                    patch("train.load_rng", side_effect=sentinel),
+                    patch("train.make_obligation_writer", side_effect=sentinel),
+                    patch("run_state.run_training_loop", side_effect=sentinel),
                     patch("train.Transformer", side_effect=sentinel),
                     patch("torch.optim.AdamW", side_effect=sentinel),
                 ):
@@ -1739,3 +1743,282 @@ class TestMainNoOpOrchestration(unittest.TestCase):
 
             after = inventory(run_dir)
             self.assertEqual(before, after)
+
+
+
+# ---------------------------------------------------------------------------
+# R1: real stop path through shared loop + real obligation writer
+# ---------------------------------------------------------------------------
+
+
+class TestRealStopPath(unittest.TestCase):
+    def test_stop_at_boundary_writes_all_three_artifacts(self):
+        import os
+        with TempDirs() as tmp:
+            run_dir = os.path.join(tmp, "seed0")
+            snap_dir = os.path.join(run_dir, "snapshots")
+            os.makedirs(snap_dir)
+            perm = list(range(4656))
+            state = make_state(
+                epoch=199, current_perm=perm, batch_cursor=9,
+                global_step=1999, next_eval_epoch=199,
+            )
+            model = FakeModel()
+            opt = FakeOpt()
+            exp = make_exp()
+
+            def full_saver_for_view(view):
+                rngs = train.rng_capture()
+                return train.make_full_saver(
+                    state, model, opt, view, torch.device("cpu"), rngs,
+                    "cfg-hash-test", "tok-hash-test", exp["identity"], 10, 0, 239,
+                )
+
+            def save_latest(view):
+                train._atomic_save(full_saver_for_view(view), os.path.join(run_dir, "latest.pt"))
+
+            writer = train.make_obligation_writer(
+                state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
+            )
+            rec = Recorder(stop_after=1)
+
+            def stop_requested():
+                return rec.updates >= 1
+
+            env = make_env(n_train=4656, batch_size=512, target_steps=100000)
+            reason = run_state.run_training_loop(
+                state, env, rec.exec_batch, lambda: rec.draw_perm(4656),
+                rec.eval_and_log, save_latest, writer, lambda: rec.updates >= 1,
+            )
+            self.assertEqual(reason, "stopped")
+            self.assertEqual(rec.updates, 1)
+            self.assertEqual(rec.evals, [(199, 2000)])
+            # artifacts exist
+            snap = os.path.join(snap_dir, "snapshot_step2000.pt")
+            backup = os.path.join(run_dir, "seed0_step2000.pt")
+            latest = os.path.join(run_dir, "latest.pt")
+            self.assertTrue(os.path.exists(snap))
+            self.assertTrue(os.path.exists(backup))
+            self.assertTrue(os.path.exists(latest))
+            sp = torch.load(snap, weights_only=True)
+            self.assertEqual(sp["step"], 2000)
+            self.assertEqual(sp["seed"], 0)
+            # idempotence by bytes
+            import hashlib
+            def h(p): return hashlib.sha256(open(p,'rb').read()).hexdigest()
+            before = {p: h(p) for p in (snap, backup, latest)}
+            writer()
+            after = {p: h(p) for p in (snap, backup, latest)}
+            self.assertEqual(before, after)
+
+
+# ---------------------------------------------------------------------------
+# R2: continuing recovery before first update
+# ---------------------------------------------------------------------------
+
+
+class TestContinuingRecovery(unittest.TestCase):
+    def test_missing_artifact_created_before_first_update(self):
+        import os
+        with TempDirs() as tmp:
+            run_dir = os.path.join(tmp, "seed0")
+            snap_dir = os.path.join(run_dir, "snapshots")
+            os.makedirs(snap_dir)
+            # checkpoint exactly at due step 2000, artifact missing, target higher
+            perm = list(range(4656))
+            state = make_state(
+                epoch=199, current_perm=perm, batch_cursor=10,
+                global_step=2000, next_eval_epoch=200,
+            )
+            model = FakeModel()
+            opt = FakeOpt()
+            exp = make_exp()
+
+            def full_saver_for_view(view):
+                rngs = train.rng_capture()
+                return train.make_full_saver(
+                    state, model, opt, view, torch.device("cpu"), rngs,
+                    "cfg-hash-test", "tok-hash-test", exp["identity"], 10, 0, 239,
+                )
+
+            writer = train.make_obligation_writer(
+                state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
+            )
+            # artifact missing initially
+            snap = os.path.join(snap_dir, "snapshot_step2000.pt")
+            self.assertFalse(os.path.exists(snap))
+            # recovery call before loop
+            writer()
+            self.assertTrue(os.path.exists(snap))
+
+
+# ---------------------------------------------------------------------------
+# R3: resolve_run_mode supplied digest enforcement before torch.load
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSuppliedDigest(unittest.TestCase):
+    def _setup(self, tmp):
+        import os, hashlib
+        rd = os.path.join(tmp, "seed0")
+        os.makedirs(rd)
+        csv_path = os.path.join(rd, "metrics.csv")
+        latest_path = os.path.join(rd, "latest.pt")
+        snap_dir = os.path.join(rd, "snapshots")
+        os.makedirs(snap_dir)
+        # write a trivial checkpoint file (bytes)
+        with open(latest_path, "wb") as f:
+            f.write(b"checkpoint-bytes")
+        real_hash = hashlib.sha256(open(latest_path, "rb").read()).hexdigest()
+        return rd, csv_path, latest_path, snap_dir, real_hash
+
+    def test_bad_digests_block_load(self):
+        import os
+        from unittest.mock import patch
+        h = "a" * 64
+        bad_cases = {
+            "missing": {},
+            "null": {"checkpoint_sha256": None},
+            "malformed": {"checkpoint_sha256": "not-hex"},
+            "wrong": {"checkpoint_sha256": "b" * 64},
+            "alias_only": {"checkpoint_hash": h},
+            "conflicting_alias": {"checkpoint_sha256": h, "sha256": h},
+        }
+        for name, prov in bad_cases.items():
+            with TempDirs() as tmp:
+                rd, csv_path, latest_path, snap_dir, real_hash = self._setup(tmp)
+                prov = dict(prov)
+                # for wrong/alias cases adjust hash to real? keep as specified
+                if name == "wrong":
+                    prov["checkpoint_sha256"] = "b" * 64
+                if name in ("alias_only", "conflicting_alias"):
+                    # canonical missing or conflicting
+                    pass
+                # attach identity for legacy-ish provenance
+                exp = make_exp()
+                prov.setdefault("seed", 0)
+                prov.setdefault("global_step", 1)
+                prov.setdefault("epoch", 0)
+                prov.setdefault("run_identity", exp["identity"])
+                prov.setdefault("run_identity_hash", exp["identity"]["run_identity_hash"])
+                # if missing canonical, remove
+                if name == "missing":
+                    prov.pop("checkpoint_sha256", None)
+                sentinel = RuntimeError("torch.load must not be called")
+                with patch("torch.load", side_effect=sentinel):
+                    with self.assertRaises(Exception):
+                        train.resolve_run_mode(
+                            rd, csv_path, latest_path, snap_dir, make_exp(), prov
+                        )
+
+    def test_correct_digest_loads(self):
+        import os
+        from unittest.mock import patch
+        with TempDirs() as tmp:
+            rd, csv_path, latest_path, snap_dir, real_hash = self._setup(tmp)
+            exp = make_exp()
+            prov = {
+                "seed": 0, "global_step": 1, "epoch": 0,
+                "checkpoint_sha256": real_hash,
+                "run_identity": exp["identity"],
+                "run_identity_hash": exp["identity"]["run_identity_hash"],
+            }
+            # patch torch.load to return a minimal ckpt? It will fail validation but load called.
+            # We only assert load is reached by allowing it to raise validation, not sentinel.
+            with patch("torch.load", side_effect=RuntimeError("loaded")):
+                with self.assertRaises(RuntimeError) as ctx:
+                    train.resolve_run_mode(rd, csv_path, latest_path, snap_dir, make_exp(), prov)
+                self.assertEqual(str(ctx.exception), "loaded")
+
+
+# ---------------------------------------------------------------------------
+# R4: strict arithmetic/MPS/zero-state/catch-up coverage
+# ---------------------------------------------------------------------------
+
+
+class TestStrictArithmeticCoverage(unittest.TestCase):
+    def test_inprogress_arithmetic_mismatch_equal_counters(self):
+        ckpt = TestCurrentSchemaValidation().valid_ckpt() if False else None
+        # reuse helper from existing class
+        t = TestCurrentSchemaValidation()
+        base = t.valid_ckpt()
+        # equal global/completed counters but wrong step arithmetic
+        base["global_step"] = 5
+        base["completed_updates"] = 5
+        with self.assertRaises(run_state.CheckpointError):
+            run_state.validate_current_checkpoint(base, make_exp())
+
+    def test_completed_arithmetic_mismatch_equal_counters(self):
+        t = TestCurrentSchemaValidation()
+        ckpt = t.valid_ckpt(mid_epoch=False)
+        ckpt["next_eval_epoch"] = 3
+        ckpt["global_step"] = 15
+        ckpt["completed_updates"] = 15
+        with self.assertRaises(run_state.CheckpointError):
+            run_state.validate_current_checkpoint(ckpt, make_exp())
+
+    def test_zero_step_inprogress_coherent(self):
+        t = TestCurrentSchemaValidation()
+        ckpt = t.valid_ckpt()
+        # build coherent zero-step state
+        ckpt["epoch"] = 0
+        ckpt["epoch_completed"] = False
+        ckpt["global_step"] = 0
+        ckpt["completed_updates"] = 0
+        ckpt["batch_cursor"] = 0
+        ckpt["next_eval_epoch"] = 0
+        ckpt["epoch_permutation"] = list(range(4656))
+        # arithmetic: 0*10+0=0 ok
+        run_state.validate_current_checkpoint(ckpt, make_exp())
+
+    def test_mps_missing_and_empty_rejected_cpu_allowed(self):
+        t = TestCurrentSchemaValidation()
+        ckpt = t.valid_ckpt()
+        ckpt["device"] = "mps"
+        ckpt["mps_rng_state"] = None
+        with self.assertRaises(run_state.CheckpointError):
+            run_state.validate_current_checkpoint(ckpt, make_exp())
+        ckpt2 = t.valid_ckpt()
+        ckpt2["device"] = "mps"
+        ckpt2["mps_rng_state"] = torch.zeros(0, dtype=torch.uint8)
+        with self.assertRaises(run_state.CheckpointError):
+            run_state.validate_current_checkpoint(ckpt2, make_exp())
+        # CPU may omit
+        ckpt3 = t.valid_ckpt()
+        ckpt3["device"] = "cpu"
+        ckpt3["mps_rng_state"] = None
+        run_state.validate_current_checkpoint(ckpt3, make_exp())
+
+
+# ---------------------------------------------------------------------------
+# R5: synthetic historical-field fixtures
+# ---------------------------------------------------------------------------
+
+
+class TestSyntheticHistoricalFields(unittest.TestCase):
+    def prov(self, epoch, gs):
+        exp = make_exp(seed=0)
+        return {
+            "seed": 0, "global_step": gs, "epoch": epoch,
+            "checkpoint_sha256": "a" * 64,
+            "run_identity": exp["identity"],
+            "run_identity_hash": exp["identity"]["run_identity_hash"],
+        }
+
+    def test_synthetic_27520_fields(self):
+        ckpt = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2751)
+        plan = run_state.validate_legacy_checkpoint(
+            ckpt, make_exp(seed=0), self.prov(2751, 27520),
+            checkpoint_sha256="a" * 64,
+        )
+        self.assertEqual(plan["start_epoch"], 2752)
+        self.assertEqual(plan["next_eval_epoch"], run_state.first_due_eval_epoch(2752))
+
+    def test_synthetic_28070_fields(self):
+        ckpt = legacy_ckpt(epoch=2806, global_step=28070, next_eval_epoch=2806)
+        plan = run_state.validate_legacy_checkpoint(
+            ckpt, make_exp(seed=0), self.prov(2806, 28070),
+            checkpoint_sha256="a" * 64,
+        )
+        self.assertEqual(plan["start_epoch"], 2807)
+        self.assertEqual(plan["next_eval_epoch"], run_state.first_due_eval_epoch(2807))

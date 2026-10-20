@@ -1855,6 +1855,86 @@ class TestRealStopPath(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+class TestRealStopPathExtra(unittest.TestCase):
+    def test_stop_artifacts_validate_and_no_repeat_writes(self):
+        import os, torch
+        with TempDirs() as tmp:
+            run_dir = os.path.join(tmp, "seed0")
+            snap_dir = os.path.join(run_dir, "snapshots")
+            os.makedirs(snap_dir)
+            perm = list(range(4656))
+            state = make_state(epoch=199, current_perm=perm, batch_cursor=9,
+                              global_step=1999, next_eval_epoch=199)
+            model = FakeModel()
+            opt = FakeOpt()
+            exp = make_exp()
+
+            def full_saver_for_view(view):
+                rngs = train.rng_capture()
+                return train.make_full_saver(state, model, opt, view, torch.device("cpu"),
+                                            rngs, "cfg-hash-test", "tok-hash-test",
+                                            exp["identity"], 10, 0, 239)
+
+            def save_latest(view):
+                train._atomic_save(full_saver_for_view(view), os.path.join(run_dir, "latest.pt"))
+
+            base_writer = train.make_obligation_writer(
+                state, model, run_dir, snap_dir, 0, 10, full_saver_for_view)
+
+            def writer():
+                old = train._stop_requested
+                train._stop_requested = True
+                try:
+                    base_writer()
+                finally:
+                    train._stop_requested = old
+
+            rec = Recorder(stop_after=1)
+            env = make_env(n_train=4656, batch_size=512, target_steps=100000)
+            reason = run_state.run_training_loop(
+                state, env, rec.exec_batch, lambda: rec.draw_perm(4656),
+                rec.eval_and_log, save_latest, writer, lambda: rec.updates >= 1,
+            )
+            self.assertEqual(reason, "stopped")
+            self.assertEqual(rec.updates, 1)
+            self.assertEqual(rec.evals, [(199, 2000)])
+            snap = os.path.join(snap_dir, "snapshot_step2000.pt")
+            backup = os.path.join(run_dir, "seed0_step2000.pt")
+            latest = os.path.join(run_dir, "latest.pt")
+            for p in (snap, backup, latest):
+                self.assertTrue(os.path.exists(p))
+            sp = torch.load(snap, weights_only=True)
+            self.assertEqual(sp["step"], 2000)
+            self.assertEqual(sp["seed"], 0)
+            for p in (latest, backup):
+                ckpt = torch.load(p, map_location="cpu", weights_only=False)
+                v = run_state.validate_current_checkpoint(ckpt, make_exp())
+                plan = run_state.plan_current_resume(v)
+                self.assertEqual(v["epoch"], 199)
+                self.assertTrue(v["epoch_completed"])
+                self.assertEqual(plan["start_epoch"], 200)
+                self.assertIsNone(plan["current_perm"])
+                self.assertEqual(plan["batch_cursor"], 0)
+            # no repeat writes
+            import os as _os
+            mtimes = {p: _os.path.getmtime(p) for p in (snap, backup, latest)}
+            hashes = {p: __import__("hashlib").sha256(open(p, "rb").read()).hexdigest() for p in (snap, backup, latest)}
+            calls = {"n": 0}
+            orig = train._atomic_save
+            def spy(fn, path):
+                calls["n"] += 1
+                return orig(fn, path)
+            train._atomic_save = spy
+            try:
+                base_writer()
+            finally:
+                train._atomic_save = orig
+            self.assertEqual(calls["n"], 0)
+            for p in (snap, backup, latest):
+                self.assertEqual(_os.path.getmtime(p), mtimes[p])
+                self.assertEqual(__import__("hashlib").sha256(open(p, "rb").read()).hexdigest(), hashes[p])
+
+
 class TestContinuingRecovery(unittest.TestCase):
     def test_recovery_artifact_exists_before_first_update(self):
         import os

@@ -1,0 +1,50 @@
+{
+  "0": {
+    "device": "mps",
+    "library_versions": {
+      "torch": "2.8.0",
+      "numpy": "2.0.2",
+      "python": "3.9.6"
+    },
+    "measured_steps_per_sec": 16.73,
+    "wall_time_sec": 5978.0,
+    "first_step_train_acc_ge_99": 1210,
+    "first_step_val_acc_ge_50": 2960,
+    "first_step_val_acc_ge_95": 3490,
+    "final_val_acc": 29.0808,
+    "max_val_acc": 100.0,
+    "n_eval_points": 355
+  },
+  "1": {
+    "device": "mps",
+    "library_versions": {
+      "torch": "2.8.0",
+      "numpy": "2.0.2",
+      "python": "3.9.6"
+    },
+    "measured_steps_per_sec": 21.22,
+    "wall_time_sec": 4712.3,
+    "first_step_train_acc_ge_99": 1570,
+    "first_step_val_acc_ge_50": 2590,
+    "first_step_val_acc_ge_95": 2940,
+    "final_val_acc": 6.6366,
+    "max_val_acc": 100.0,
+    "n_eval_points": 346
+  },
+  "2": {
+    "device": "mps",
+    "library_versions": {
+      "torch": "2.8.0",
+      "numpy": "2.0.2",
+      "python": "3.9.6"
+    },
+    "measured_steps_per_sec": 21.97,
+    "wall_time_sec": 4552.1,
+    "first_step_train_acc_ge_99": 1350,
+    "first_step_val_acc_ge_50": 2890,
+    "first_step_val_acc_ge_95": 3460,
+    "final_val_acc": 99.957,
+    "max_val_acc": 100.0,
+    "n_eval_points": 346
+  }
+}

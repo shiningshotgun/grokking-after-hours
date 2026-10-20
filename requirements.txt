@@ -1,0 +1,23 @@
+# Dependency record for grokking-reproduction.
+#
+# This file RECORDS the environment that was actually used for the retained
+# runs and endpoint measurements (verified against the local .venv via
+# importlib.metadata on 2026-10-19/20):
+#   Python 3.9.6 (macOS, arm64, Apple Silicon MPS)
+#   torch 2.8.0
+#   numpy 2.0.2
+#   matplotlib 3.9.4
+#
+# IMPORTANT: this is an environment record, NOT a tested fresh-install
+# recipe or lockfile. No fresh install was performed or validated in this
+# project; exact pip resolution for these pins on other platforms/Pythons is
+# unverified. torch 2.8.0 wheels require Python >= 3.9; other Python versions
+# are untested here.
+#
+# Backend caveats: the retained runs used the MPS backend, which is not
+# bitwise-deterministic; no CPU/CUDA parity is claimed or recorded. Device
+# selection prefers MPS when torch.backends.mps.is_available(), else CPU.
+
+torch==2.8.0
+numpy==2.0.2
+matplotlib==3.9.4

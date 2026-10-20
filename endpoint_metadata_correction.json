@@ -1,0 +1,59 @@
+{
+  "document_type": "endpoint_metadata_correction",
+  "corrects": "endpoint_metrics.json",
+  "summary": "The retained endpoint_metrics.json recorded config_split_hash under the older 2-field config-prefix definition and compared it against the training-time 5-field expected constant, producing hash_matches_expected=false. This supplement records both definitions and the independently recomputed digests. The two digests are DIFFERENT; only the dataset bytes are identical between them. The original JSON's comparison was invalid (definition mismatch), not the underlying data.",
+  "original_endpoint_json": {
+    "path": "endpoint_metrics.json",
+    "sha256": "e5d8bb4c7359945c2f5bec3073fef41e0677d61319faffdc06b21933f2df3e21",
+    "byte_size": 4749,
+    "measurement_values_unchanged": true,
+    "device_and_library_metadata_unchanged": true,
+    "note": "The original file is historical evidence and was NOT modified, regenerated or given any new timestamp. Its false hash_matches_expected flag and measured values stand as recorded."
+  },
+  "hash_definitions": {
+    "shared_computation": "h = SHA-256(); h.update(prefix.encode('utf-8')); h.update(train_bytes); h.update(val_bytes); digest = h.hexdigest() (lowercase hex)",
+    "split_bytes": "C-contiguous, row-major int64 (8-byte little-endian) raw bytes of train_data.numpy().tobytes() then val_data.numpy().tobytes(); each tensor has shape (4656, 7) so each contributes 260,736 bytes; produced by data.py build_split() (modulus 97, 50% split, vocab 239).",
+    "old_two_field": {
+      "prefix_serialization": "str({'modulus': 97, 'train_pct': 50})",
+      "prefix_string": "{'modulus': 97, 'train_pct': 50}",
+      "field_order": "modulus, train_pct (Python str() of the dict literal, single quotes, insertion order)",
+      "sha256": "c4625d6bd0439ae850cd543228b2b4e31607377b2c727a43de2115936c4c4dab",
+      "recorded_as": "endpoint_metrics.json metadata.split.config_split_hash"
+    },
+    "training_five_field": {
+      "prefix_serialization": "str({'modulus': 97, 'train_pct': 50, 'bs': 512, 'lr': 1e-3, 'wd': 1.0})",
+      "prefix_string": "{'modulus': 97, 'train_pct': 50, 'bs': 512, 'lr': 0.001, 'wd': 1.0}",
+      "field_order": "modulus, train_pct, bs, lr, wd (Python str() of the dict literal, single quotes, insertion order; lr serializes as 0.001)",
+      "sha256": "b594e7359268932d8aa33c78704dcc429083a418566085c572bea56921c0c458",
+      "recorded_as": "endpoint_metrics.json metadata.split.expected_hash (training-time constant; also carried in every schema-2 full checkpoint as config_split_hash)"
+    },
+    "relationship": "Both digests hash the SAME generated split bytes with DIFFERENT config prefixes; therefore the two digests are different by construction. An earlier claim that the two hashes were 'identical' was wrong and has been removed from the documentation."
+  },
+  "correction": {
+    "old_flag": "metadata.split.hash_matches_expected = false",
+    "correct_interpretation": "The flag compared a 2-field-prefix digest against a 5-field expected constant; the comparison crossed definitions and could never match. The dataset bytes themselves were verified identical by both recomputations.",
+    "action": "No change to endpoint_metrics.json. Future evaluator outputs record the 5-field definition explicitly (see metadata.split.config_split_hash_definition in new outputs)."
+  },
+  "metadata_correction_created_at_utc": "2026-10-19T20:19:32Z",
+  "measurement_time_note": "endpoint_metrics.json carries no explicit measurement timestamp field; its device/library metadata (torch 2.8.0, numpy 2.0.2, python 3.9.6) is unchanged. The creation time above is the time this correction document was written, NOT a measurement time; no measurement timestamp was added to the original JSON.",
+  "current_evaluator_source": {
+    "script": "evaluate_endpoints.py",
+    "sha256": "717ce7df80af9bf9e9b6017b53307440201b5ae333889f20c7956020f4afee71",
+    "byte_size": 10500,
+    "output_schema_version": 2,
+    "note": "This hash identifies the evaluator source that would generate FUTURE outputs (output_schema_version 2). It is not claimed to be the source that generated the retained endpoint_metrics.json."
+  },
+  "verification": {
+    "method": "Independent deterministic recomputation of both digests from data.py build_split() only (dataset construction; no model execution, no inference, no training).",
+    "verified_at_utc": "2026-10-19T20:19:32Z",
+    "result": {
+      "old_two_field_recomputed": "c4625d6bd0439ae850cd543228b2b4e31607377b2c727a43de2115936c4c4dab",
+      "old_two_field_matches_recorded": true,
+      "training_five_field_recomputed": "b594e7359268932d8aa33c78704dcc429083a418566085c572bea56921c0c458",
+      "training_five_field_matches_expected_constant": true,
+      "split_bytes_identical_between_definitions": true,
+      "digests_equal": false
+    },
+    "limits": "Matching definitions/bytes establishes provenance only: it reconciles the hash-definition mismatch behind the old false flag. It is NOT a new accuracy/loss measurement, NOT an independent replay of training, and NOT a claim that the current evaluator source generated the original JSON. The original measurement values remain exactly as recorded."
+  }
+}

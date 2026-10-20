@@ -1,0 +1,102 @@
+{
+  "seeds": {
+    "0": {
+      "first_train_ge_99": 1210,
+      "first_val_ge_50": 2960,
+      "first_val_ge_95": 3490,
+      "first_val_ge_99": 3760,
+      "best_val_acc_logged": 100.0,
+      "last_logged_step": 99090,
+      "last_logged_train_acc": 35.91065216064453,
+      "last_logged_val_acc": 29.08075714111328,
+      "endpoint_100k": {
+        "seed": 0,
+        "snapshot_path": "runs/seed0/snapshots/snapshot_step100000.pt",
+        "source_sha256": "896ec759014e28c9b7d0a5b8fc1172540520efc05a69615e3f322c0933bf6fe1",
+        "snapshot_step": 100000,
+        "snapshot_seed": 0,
+        "status": "measured",
+        "train": {
+          "loss": 0.6984162166765875,
+          "accuracy": 36.0180412371134,
+          "n_equations": 4656,
+          "n_tokens": 9312,
+          "correct_equations": 1677
+        },
+        "val": {
+          "loss": 0.716615871055839,
+          "accuracy": 28.737113402061855,
+          "n_equations": 4656,
+          "n_tokens": 9312,
+          "correct_equations": 1338
+        }
+      }
+    },
+    "1": {
+      "first_train_ge_99": 1570,
+      "first_val_ge_50": 2590,
+      "first_val_ge_95": 2940,
+      "first_val_ge_99": 3340,
+      "best_val_acc_logged": 100.0,
+      "last_logged_step": 98950,
+      "last_logged_train_acc": 8.225945472717285,
+      "last_logged_val_acc": 6.636598110198975,
+      "endpoint_100k": {
+        "seed": 1,
+        "snapshot_path": "runs/seed1/snapshots/snapshot_step100000.pt",
+        "source_sha256": "9f2f919930bb75374d6ba6c9b6ef6143e4852c3359c5f33c6840548430f63d51",
+        "snapshot_step": 100000,
+        "snapshot_seed": 1,
+        "status": "measured",
+        "train": {
+          "loss": 0.08753097712788795,
+          "accuracy": 100.0,
+          "n_equations": 4656,
+          "n_tokens": 9312,
+          "correct_equations": 4656
+        },
+        "val": {
+          "loss": 0.09407816617349579,
+          "accuracy": 100.0,
+          "n_equations": 4656,
+          "n_tokens": 9312,
+          "correct_equations": 4656
+        }
+      }
+    },
+    "2": {
+      "first_train_ge_99": 1350,
+      "first_val_ge_50": 2890,
+      "first_val_ge_95": 3460,
+      "first_val_ge_99": 3730,
+      "best_val_acc_logged": 100.0,
+      "last_logged_step": 98950,
+      "last_logged_train_acc": 100.0,
+      "last_logged_val_acc": 99.95704650878906,
+      "endpoint_100k": {
+        "seed": 2,
+        "snapshot_path": "runs/seed2/snapshots/snapshot_step100000.pt",
+        "source_sha256": "6726d38afa7589bc3be07e2aa8ed73b3a7b86a812ca10f3ac5ce5279d1be0c9f",
+        "snapshot_step": 100000,
+        "snapshot_seed": 2,
+        "status": "measured",
+        "train": {
+          "loss": 0.019768172715025668,
+          "accuracy": 99.97852233676976,
+          "n_equations": 4656,
+          "n_tokens": 9312,
+          "correct_equations": 4655
+        },
+        "val": {
+          "loss": 0.023857748155126868,
+          "accuracy": 99.97852233676976,
+          "n_equations": 4656,
+          "n_tokens": 9312,
+          "correct_equations": 4655
+        }
+      }
+    }
+  },
+  "best_val_acc_mean_over_seeds": 100.0,
+  "mean_endpoint_val_acc": 76.23854524627721
+}

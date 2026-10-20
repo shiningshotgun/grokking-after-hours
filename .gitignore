@@ -1,0 +1,23 @@
+# OS metadata
+.DS_Store
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Environments
+.venv/
+env/
+venv/
+
+# Training artifacts (checkpoints/logs are archived externally)
+*.pt
+*.log
+scratch_*/
+runs/**/snapshots/
+runs/**/latest*.pt
+checkpoints/
+
+# Keep raw metrics CSVs (runs/seed*/metrics.csv) and plots.

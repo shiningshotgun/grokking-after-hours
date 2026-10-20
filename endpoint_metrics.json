@@ -1,0 +1,164 @@
+{
+  "metadata": {
+    "device": "mps",
+    "dtype": "float32",
+    "library_versions": {
+      "torch": "2.8.0",
+      "numpy": "2.0.2",
+      "python": "3.9.6"
+    },
+    "split": {
+      "modulus": 97,
+      "train_count": 4656,
+      "val_count": 4656,
+      "vocab": 239,
+      "config_split_hash": "c4625d6bd0439ae850cd543228b2b4e31607377b2c727a43de2115936c4c4dab",
+      "expected_hash": "b594e7359268932d8aa33c78704dcc429083a418566085c572bea56921c0c458",
+      "hash_matches_expected": false
+    },
+    "evaluation": {
+      "mode": "eval/no_grad",
+      "shuffling": false,
+      "masking": "answer_plus_EOS_after_=",
+      "accuracy": "equation_level_both_tokens",
+      "aggregation": "cross_entropy_by_token_count, accuracy_by_equation_count"
+    },
+    "note": "MPS not bitwise-deterministic; comparability caveat. Endpoint measurements separate from last_logged CSV rows."
+  },
+  "endpoints_100000": {
+    "0": {
+      "seed": 0,
+      "snapshot_path": "runs/seed0/snapshots/snapshot_step100000.pt",
+      "source_sha256": "896ec759014e28c9b7d0a5b8fc1172540520efc05a69615e3f322c0933bf6fe1",
+      "snapshot_step": 100000,
+      "snapshot_seed": 0,
+      "status": "measured",
+      "train": {
+        "loss": 0.6984162166765875,
+        "accuracy": 36.0180412371134,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 1677
+      },
+      "val": {
+        "loss": 0.716615871055839,
+        "accuracy": 28.737113402061855,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 1338
+      }
+    },
+    "1": {
+      "seed": 1,
+      "snapshot_path": "runs/seed1/snapshots/snapshot_step100000.pt",
+      "source_sha256": "9f2f919930bb75374d6ba6c9b6ef6143e4852c3359c5f33c6840548430f63d51",
+      "snapshot_step": 100000,
+      "snapshot_seed": 1,
+      "status": "measured",
+      "train": {
+        "loss": 0.08753097712788795,
+        "accuracy": 100.0,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 4656
+      },
+      "val": {
+        "loss": 0.09407816617349579,
+        "accuracy": 100.0,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 4656
+      }
+    },
+    "2": {
+      "seed": 2,
+      "snapshot_path": "runs/seed2/snapshots/snapshot_step100000.pt",
+      "source_sha256": "6726d38afa7589bc3be07e2aa8ed73b3a7b86a812ca10f3ac5ce5279d1be0c9f",
+      "snapshot_step": 100000,
+      "snapshot_seed": 2,
+      "status": "measured",
+      "train": {
+        "loss": 0.019768172715025668,
+        "accuracy": 99.97852233676976,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 4655
+      },
+      "val": {
+        "loss": 0.023857748155126868,
+        "accuracy": 99.97852233676976,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 4655
+      }
+    }
+  },
+  "stale_latest_checkpoints": {
+    "0": {
+      "seed": 0,
+      "path": "runs/seed0/latest.pt",
+      "source_sha256": "49a3fdf2ca55d8becd1cc7f1794e05f5444cb6892fc7ea4e965286ebc84a5f22",
+      "status": "measured",
+      "global_step": 99090,
+      "epoch": 9908,
+      "train": {
+        "loss": 0.6834101381990099,
+        "accuracy": 35.9106529209622,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 1672
+      },
+      "val": {
+        "loss": 0.701823300102732,
+        "accuracy": 29.080756013745706,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 1354
+      }
+    },
+    "1": {
+      "seed": 1,
+      "path": "runs/seed1/latest.pt",
+      "source_sha256": "67c14c5b173aea5f63aad9b8ae920101c69f11c7c0258486a367580557284b83",
+      "status": "measured",
+      "global_step": 98950,
+      "epoch": 9894,
+      "train": {
+        "loss": 1.9786588596724153,
+        "accuracy": 8.22594501718213,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 383
+      },
+      "val": {
+        "loss": 2.005960002387922,
+        "accuracy": 6.63659793814433,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 309
+      }
+    },
+    "2": {
+      "seed": 2,
+      "path": "runs/seed2/latest.pt",
+      "source_sha256": "1598cc81bae15532fa491d17769e648ceeba5bb97dcb0f37bf50abcaeebb4849",
+      "status": "measured",
+      "global_step": 98950,
+      "epoch": 9894,
+      "train": {
+        "loss": 0.02812845096043295,
+        "accuracy": 100.0,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 4656
+      },
+      "val": {
+        "loss": 0.032822996813202235,
+        "accuracy": 99.95704467353951,
+        "n_equations": 4656,
+        "n_tokens": 9312,
+        "correct_equations": 4654
+      }
+    }
+  }
+}

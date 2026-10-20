@@ -4,6 +4,7 @@ A from-scratch reimplementation of one experiment from Power et al., 2022,
 "Grokking: Generalization Beyond Overfitting on Small Algorithmic Datasets"
 (https://arxiv.org/abs/2201.02177), following the paper's default configuration
 (AdamW, lr 1e-3, weight decay 1.0, 50% data, 100,000 updates, 3 seeds).
+How this study compares with the Grokking paper: [paper_vs_study.md](paper_vs_study.md).
 
 Dataset and model architecture are adapted from the official
 [openai/grok](https://github.com/openai/grok) repository (MIT license); this

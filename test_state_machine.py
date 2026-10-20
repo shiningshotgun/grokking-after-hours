@@ -1792,9 +1792,18 @@ class TestRealStopPath(unittest.TestCase):
                     full_saver_for_view(view), os.path.join(run_dir, "latest.pt")
                 )
 
-            writer = train.make_obligation_writer(
+            base_writer = train.make_obligation_writer(
                 state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
             )
+
+            def writer():
+                old = train._stop_requested
+                train._stop_requested = True
+                try:
+                    base_writer()
+                finally:
+                    train._stop_requested = old
+
             rec = Recorder(stop_after=1)
 
             def stop_requested():
@@ -1849,18 +1858,13 @@ class TestRealStopPath(unittest.TestCase):
 class TestContinuingRecovery(unittest.TestCase):
     def test_recovery_artifact_exists_before_first_update(self):
         import os
-
         with TempDirs() as tmp:
             run_dir = os.path.join(tmp, "seed0")
             snap_dir = os.path.join(run_dir, "snapshots")
             os.makedirs(snap_dir)
-            perm = list(range(4656))
             state = make_state(
-                epoch=200,
-                current_perm=None,
-                batch_cursor=0,
-                global_step=2000,
-                next_eval_epoch=200,
+                epoch=200, current_perm=None, batch_cursor=0,
+                global_step=2000, next_eval_epoch=200,
             )
             model = FakeModel()
             opt = FakeOpt()
@@ -1869,18 +1873,8 @@ class TestContinuingRecovery(unittest.TestCase):
             def full_saver_for_view(view):
                 rngs = train.rng_capture()
                 return train.make_full_saver(
-                    state,
-                    model,
-                    opt,
-                    view,
-                    torch.device("cpu"),
-                    rngs,
-                    "cfg-hash-test",
-                    "tok-hash-test",
-                    exp["identity"],
-                    10,
-                    0,
-                    239,
+                    state, model, opt, view, torch.device("cpu"), rngs,
+                    "cfg-hash-test", "tok-hash-test", exp["identity"], 10, 0, 239,
                 )
 
             writer = train.make_obligation_writer(
@@ -1888,30 +1882,22 @@ class TestContinuingRecovery(unittest.TestCase):
             )
             snap = os.path.join(snap_dir, "snapshot_step2000.pt")
             self.assertFalse(os.path.exists(snap))
-            # production recovery before loop
-            writer()
-            self.assertTrue(os.path.exists(snap))
 
-            seen = {"value": False}
+            seen = {"value": False, "count": 0}
 
             def exec_batch(idx):
                 seen["value"] = os.path.exists(snap)
+                seen["count"] += 1
                 rec.exec_batch(idx)
 
             rec = Recorder()
             env = make_env(n_train=4656, batch_size=512, target_steps=2001)
-            run_state.run_training_loop(
-                state,
-                env,
-                exec_batch,
-                lambda: rec.draw_perm(4656),
-                rec.eval_and_log,
-                lambda v: None,
-                writer,
-                lambda: False,
+            reason = train.continue_with_recovery(
+                state, env, exec_batch, lambda: rec.draw_perm(4656),
+                rec.eval_and_log, lambda v: None, writer, lambda: False,
             )
             self.assertTrue(seen["value"])
-
+            self.assertEqual(seen["count"], 1)
 
 class TestResolveSuppliedDigest(unittest.TestCase):
     def _setup(self, tmp):
@@ -2231,38 +2217,45 @@ class TestSyntheticHistoricalFields(unittest.TestCase):
 
 
 class TestCatchupRoundtrip(unittest.TestCase):
-    def test_stale_pointer_serializes_validates_resumes(self):
+    def test_real_catchup_loop_serializes_valid_resume(self):
         import os, torch
         with TempDirs() as tmp:
-            rd = os.path.join(tmp, "seed0")
-            os.makedirs(rd)
-            latest_path = os.path.join(rd, "latest.pt")
-            exp = make_exp()
-            # in-progress epoch 2, cursor 3, stale pointer 1
+            run_dir = os.path.join(tmp, "seed0")
+            snap_dir = os.path.join(run_dir, "snapshots")
+            os.makedirs(snap_dir)
+            latest_path = os.path.join(run_dir, "latest.pt")
             perm = list(range(4656))[::-1]
-            st = make_state(epoch=2, current_perm=perm, batch_cursor=3,
-                            global_step=2*10+3, next_eval_epoch=1)
-            view = run_state.save_view(st.epoch, st.current_perm, st.batch_cursor, 10)
-            e_s, p_s, c_s, done = view
-            train._atomic_save(
-                lambda p: train.save_ckpt(
-                    p, FakeModel(), FakeOpt(), e_s, st.global_step, 1,
-                    torch.device("cpu"), train.rng_capture(), "cfg-hash-test",
-                    "tok-hash-test", exp["identity"], p_s, c_s, 10, done, 0, 239,
-                ),
-                latest_path,
+            state = make_state(epoch=2, current_perm=perm, batch_cursor=9,
+                              global_step=2*10+9, next_eval_epoch=1)
+            model = FakeModel()
+            opt = FakeOpt()
+            exp = make_exp()
+
+            def full_saver_for_view(view):
+                rngs = train.rng_capture()
+                return train.make_full_saver(
+                    state, model, opt, view, torch.device("cpu"), rngs,
+                    "cfg-hash-test", "tok-hash-test", exp["identity"], 10, 0, 239,
+                )
+
+            def save_latest(view):
+                train._atomic_save(full_saver_for_view(view), latest_path)
+
+            writer = train.make_obligation_writer(
+                state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
             )
+            rec = Recorder()
+            env = make_env(n_train=4656, batch_size=512, target_steps=state.global_step+1)
+            reason = run_state.run_training_loop(
+                state, env, rec.exec_batch, lambda: rec.draw_perm(4656),
+                rec.eval_and_log, save_latest, writer, lambda: False,
+            )
+            self.assertEqual(reason, "target_reached")
+            self.assertEqual(rec.evals, [(2, state.global_step)])
             ckpt = torch.load(latest_path, map_location="cpu", weights_only=False)
-            # fix pointer to stale 1 in ckpt
-            ckpt["next_eval_epoch"] = 1
-            torch.save(ckpt, latest_path)
-            # validation should reject stale pointer
-            with self.assertRaises(run_state.CheckpointError):
-                run_state.validate_current_checkpoint(ckpt, exp)
-            # now set coherent pointer and re-save
-            ckpt["next_eval_epoch"] = run_state.first_due_eval_epoch(2)
-            torch.save(ckpt, latest_path)
-            ckpt2 = torch.load(latest_path, map_location="cpu", weights_only=False)
-            v = run_state.validate_current_checkpoint(ckpt2, exp)
+            v = run_state.validate_current_checkpoint(ckpt, exp)
             plan = run_state.plan_current_resume(v)
-            self.assertGreaterEqual(plan["next_eval_epoch"], 2)
+            self.assertGreaterEqual(plan["next_eval_epoch"], 3)
+            self.assertEqual(plan["global_step"], state.global_step)
+
+

@@ -355,6 +355,16 @@ def make_obligation_writer(state, model, run_dir, snap_dir, seed, n_batches,
     return write_obligations
 
 
+def continue_with_recovery(state, env, exec_batch, draw_perm, eval_and_log,
+                           save_latest, write_obligations, stop_requested):
+    """Production recovery-then-loop path shared by main() and tests."""
+    write_obligations()
+    return run_state.run_training_loop(
+        state, env, exec_batch, draw_perm, eval_and_log, save_latest,
+        write_obligations, stop_requested,
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True)
@@ -559,14 +569,12 @@ def main():
     # update and its snapshot write) are written before any new minibatch.
     # (Only reached for genuinely continuing runs; completed targets exited
     # read-only above.)
-    write_obligations()
-
     def draw_perm():
         return torch.randperm(n_train)
 
     model.train()
     t0 = time.time()
-    reason = run_state.run_training_loop(
+    reason = continue_with_recovery(
         state,
         env,
         exec_batch,

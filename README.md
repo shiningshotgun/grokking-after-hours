@@ -59,13 +59,13 @@ without any workload:
 
 ```bash
 .venv/bin/python -m unittest test_state_machine -v
+```
 
 Legacy checkpoint migration requires a trusted sidecar JSON with seed,
 global_step, epoch, a 64-hex checkpoint SHA-256, and the full canonical
 run_identity plus run_identity_hash. The sidecar binds claims to bytes but is
 not itself authenticated; users must supply a trusted record. Missing or
 inconsistent provenance blocks migration rather than being guessed.
-```
 
 ## Training (reference only; not executed in the correction passes)
 

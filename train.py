@@ -260,17 +260,12 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
         # torch.load so a mismatching/malformed sidecar cannot trigger a load.
         ckpt_hash = file_sha256(latest_path)
         if isinstance(provenance, dict):
-            hash_aliases = (
-                "checkpoint_sha256",
-                "checkpoint_hash",
-                "sha256",
-                "file_sha256",
-            )
-            prov_hash = None
-            for alias in hash_aliases:
-                if alias in provenance:
-                    prov_hash = provenance.get(alias)
-                    break
+            if any(a in provenance for a in ("checkpoint_hash", "sha256", "file_sha256")):
+                raise run_state.LegacyCheckpointRefused(
+                    "provenance uses a non-canonical digest key; only "
+                    "'checkpoint_sha256' is accepted"
+                )
+            prov_hash = provenance.get("checkpoint_sha256")
             if prov_hash is not None:
                 if (
                     not isinstance(prov_hash, str)

@@ -580,17 +580,20 @@ def validate_legacy_checkpoint(ckpt, exp, provenance, checkpoint_sha256=None):
         )
     # Trusted provenance must bind its claims to the checkpoint bytes via a
     # SHA-256 over the explicitly selected checkpoint file.
-    hash_aliases = ("checkpoint_sha256", "checkpoint_hash", "sha256", "file_sha256")
-    prov_hash = None
-    for alias in hash_aliases:
-        if isinstance(provenance, dict) and alias in provenance:
-            prov_hash = provenance.get(alias)
-            break
+    # Only the canonical digest key is accepted; aliases are rejected to
+    # remove ambiguity and ignored contradictions.
+    if isinstance(provenance, dict) and any(
+        a in provenance for a in ("checkpoint_hash", "sha256", "file_sha256")
+    ):
+        raise LegacyCheckpointRefused(
+            "provenance uses a non-canonical digest key; only "
+            "'checkpoint_sha256' is accepted"
+        )
+    prov_hash = provenance.get("checkpoint_sha256") if isinstance(provenance, dict) else None
     if prov_hash is None:
         raise LegacyCheckpointRefused(
-            "trusted provenance record lacks a checkpoint SHA-256 "
-            "(expected one of %s); a sidecar repeating seed/epoch/step does "
-            "not bind those claims to checkpoint bytes" % ", ".join(hash_aliases)
+            "trusted provenance record lacks required checkpoint_sha256; a "
+            "sidecar repeating seed/epoch/step does not bind claims to bytes"
         )
     if not isinstance(prov_hash, str) or len(prov_hash) != 64 or any(
         c not in "0123456789abcdef" for c in prov_hash.lower()

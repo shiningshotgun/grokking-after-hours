@@ -192,8 +192,8 @@ class TestSchedule(unittest.TestCase):
             rec.make_stop(),
         )
         # Evaluations happen at each epoch end until the pointer passes the
-        # epoch: 7 (due), 8, 9 — never silently skipped. The pointer advances
-        # by the recurrence from its own value: 5 -> 6 -> 7 -> 8.
+        # epoch: 7 (due), 8, 9 — never silently skipped. Catch-up follows the
+        # official recurrence from the stale pointer to beyond the completed epoch.
         self.assertEqual([e[0] for e in rec.evals], [7, 8, 9])
         self.assertEqual(state.next_eval_epoch, 10)
 
@@ -941,7 +941,7 @@ class TestLegacyValidation(unittest.TestCase):
             "run_identity_hash": exp["identity"]["run_identity_hash"],
         }
 
-    def test_known_pause_27520_boundary_accepted(self):
+    def test_synthetic_valid_future_pointer_27520_accepted(self):
         ckpt = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2806)
         plan = run_state.validate_legacy_checkpoint(
             ckpt,
@@ -973,6 +973,37 @@ class TestLegacyValidation(unittest.TestCase):
             run_state.validate_legacy_checkpoint(ckpt, self.EXP, None)
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(ckpt, self.EXP, {})
+
+    def test_canonical_digest_aliases_rejected(self):
+        h = "a" * 64
+        ckpt = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2806)
+        for alias in ("checkpoint_hash", "sha256", "file_sha256"):
+            prov = {
+                "seed": 0,
+                "global_step": 27520,
+                "epoch": 2751,
+                alias: h,
+                "run_identity": self.EXP["identity"],
+                "run_identity_hash": self.EXP["identity"]["run_identity_hash"],
+            }
+            with self.assertRaises(run_state.LegacyCheckpointRefused):
+                run_state.validate_legacy_checkpoint(
+                    ckpt, self.EXP, prov, checkpoint_sha256=h
+                )
+        # conflicting alias alongside canonical key also rejected
+        prov2 = {
+            "seed": 0,
+            "global_step": 27520,
+            "epoch": 2751,
+            "checkpoint_sha256": h,
+            "checkpoint_hash": h,
+            "run_identity": self.EXP["identity"],
+            "run_identity_hash": self.EXP["identity"]["run_identity_hash"],
+        }
+        with self.assertRaises(run_state.LegacyCheckpointRefused):
+            run_state.validate_legacy_checkpoint(
+                ckpt, self.EXP, prov2, checkpoint_sha256=h
+            )
 
     def test_provenance_mismatch_refused(self):
         ckpt = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2806)

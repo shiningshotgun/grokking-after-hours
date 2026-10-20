@@ -259,28 +259,28 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
         # provenance digest is supplied (legacy path), verify it before
         # torch.load so a mismatching/malformed sidecar cannot trigger a load.
         ckpt_hash = file_sha256(latest_path)
-        if isinstance(provenance, dict):
+        if provenance is not None:
+            if not isinstance(provenance, dict):
+                raise run_state.LegacyCheckpointRefused(
+                    "supplied provenance must be a JSON object"
+                )
             if any(a in provenance for a in ("checkpoint_hash", "sha256", "file_sha256")):
                 raise run_state.LegacyCheckpointRefused(
                     "provenance uses a non-canonical digest key; only "
                     "'checkpoint_sha256' is accepted"
                 )
             prov_hash = provenance.get("checkpoint_sha256")
-            if prov_hash is not None:
-                if (
-                    not isinstance(prov_hash, str)
-                    or len(prov_hash) != 64
-                    or any(c not in "0123456789abcdef" for c in prov_hash.lower())
-                ):
-                    raise run_state.LegacyCheckpointRefused(
-                        "provenance checkpoint digest %r is not a 64-hex SHA-256"
-                        % (prov_hash,)
-                    )
-                if prov_hash != ckpt_hash:
-                    raise run_state.LegacyCheckpointRefused(
-                        "checkpoint SHA-256 %r does not match provenance record %r"
-                        % (ckpt_hash, prov_hash)
-                    )
+            if not isinstance(prov_hash, str) or len(prov_hash) != 64 or any(
+                c not in "0123456789abcdef" for c in prov_hash.lower()
+            ):
+                raise run_state.LegacyCheckpointRefused(
+                    "supplied provenance requires a 64-hex checkpoint_sha256"
+                )
+            if prov_hash != ckpt_hash:
+                raise run_state.LegacyCheckpointRefused(
+                    "checkpoint SHA-256 %r does not match provenance record %r"
+                    % (ckpt_hash, prov_hash)
+                )
         # Full checkpoints embed RNG tuples/ndarrays that the restricted
         # (weights_only=True) loader rejects; weights_only=False here is
         # therefore scoped to trusted local full checkpoints only and must not

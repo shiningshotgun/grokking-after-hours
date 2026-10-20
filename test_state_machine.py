@@ -1745,7 +1745,6 @@ class TestMainNoOpOrchestration(unittest.TestCase):
             self.assertEqual(before, after)
 
 
-
 # ---------------------------------------------------------------------------
 # R1: real stop path through shared loop + real obligation writer
 # ---------------------------------------------------------------------------
@@ -1754,14 +1753,18 @@ class TestMainNoOpOrchestration(unittest.TestCase):
 class TestRealStopPath(unittest.TestCase):
     def test_stop_at_boundary_writes_all_three_artifacts(self):
         import os
+
         with TempDirs() as tmp:
             run_dir = os.path.join(tmp, "seed0")
             snap_dir = os.path.join(run_dir, "snapshots")
             os.makedirs(snap_dir)
             perm = list(range(4656))
             state = make_state(
-                epoch=199, current_perm=perm, batch_cursor=9,
-                global_step=1999, next_eval_epoch=199,
+                epoch=199,
+                current_perm=perm,
+                batch_cursor=9,
+                global_step=1999,
+                next_eval_epoch=199,
             )
             model = FakeModel()
             opt = FakeOpt()
@@ -1770,12 +1773,24 @@ class TestRealStopPath(unittest.TestCase):
             def full_saver_for_view(view):
                 rngs = train.rng_capture()
                 return train.make_full_saver(
-                    state, model, opt, view, torch.device("cpu"), rngs,
-                    "cfg-hash-test", "tok-hash-test", exp["identity"], 10, 0, 239,
+                    state,
+                    model,
+                    opt,
+                    view,
+                    torch.device("cpu"),
+                    rngs,
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    10,
+                    0,
+                    239,
                 )
 
             def save_latest(view):
-                train._atomic_save(full_saver_for_view(view), os.path.join(run_dir, "latest.pt"))
+                train._atomic_save(
+                    full_saver_for_view(view), os.path.join(run_dir, "latest.pt")
+                )
 
             writer = train.make_obligation_writer(
                 state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
@@ -1787,8 +1802,14 @@ class TestRealStopPath(unittest.TestCase):
 
             env = make_env(n_train=4656, batch_size=512, target_steps=100000)
             reason = run_state.run_training_loop(
-                state, env, rec.exec_batch, lambda: rec.draw_perm(4656),
-                rec.eval_and_log, save_latest, writer, lambda: rec.updates >= 1,
+                state,
+                env,
+                rec.exec_batch,
+                lambda: rec.draw_perm(4656),
+                rec.eval_and_log,
+                save_latest,
+                writer,
+                lambda: rec.updates >= 1,
             )
             self.assertEqual(reason, "stopped")
             self.assertEqual(rec.updates, 1)
@@ -1805,9 +1826,17 @@ class TestRealStopPath(unittest.TestCase):
             self.assertEqual(sp["seed"], 0)
             # idempotence by bytes
             import hashlib
-            def h(p): return hashlib.sha256(open(p,'rb').read()).hexdigest()
+
+            def h(p):
+                return hashlib.sha256(open(p, "rb").read()).hexdigest()
+
             before = {p: h(p) for p in (snap, backup, latest)}
-            writer()
+            old_stop = train._stop_requested
+            train._stop_requested = True
+            try:
+                writer()
+            finally:
+                train._stop_requested = old_stop
             after = {p: h(p) for p in (snap, backup, latest)}
             self.assertEqual(before, after)
 
@@ -1818,17 +1847,20 @@ class TestRealStopPath(unittest.TestCase):
 
 
 class TestContinuingRecovery(unittest.TestCase):
-    def test_missing_artifact_created_before_first_update(self):
+    def test_recovery_artifact_exists_before_first_update(self):
         import os
+
         with TempDirs() as tmp:
             run_dir = os.path.join(tmp, "seed0")
             snap_dir = os.path.join(run_dir, "snapshots")
             os.makedirs(snap_dir)
-            # checkpoint exactly at due step 2000, artifact missing, target higher
             perm = list(range(4656))
             state = make_state(
-                epoch=199, current_perm=perm, batch_cursor=10,
-                global_step=2000, next_eval_epoch=200,
+                epoch=200,
+                current_perm=None,
+                batch_cursor=0,
+                global_step=2000,
+                next_eval_epoch=200,
             )
             model = FakeModel()
             opt = FakeOpt()
@@ -1837,103 +1869,266 @@ class TestContinuingRecovery(unittest.TestCase):
             def full_saver_for_view(view):
                 rngs = train.rng_capture()
                 return train.make_full_saver(
-                    state, model, opt, view, torch.device("cpu"), rngs,
-                    "cfg-hash-test", "tok-hash-test", exp["identity"], 10, 0, 239,
+                    state,
+                    model,
+                    opt,
+                    view,
+                    torch.device("cpu"),
+                    rngs,
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    10,
+                    0,
+                    239,
                 )
 
             writer = train.make_obligation_writer(
                 state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
             )
-            # artifact missing initially
             snap = os.path.join(snap_dir, "snapshot_step2000.pt")
             self.assertFalse(os.path.exists(snap))
-            # recovery call before loop
+            # production recovery before loop
             writer()
             self.assertTrue(os.path.exists(snap))
 
+            seen = {"value": False}
 
-# ---------------------------------------------------------------------------
-# R3: resolve_run_mode supplied digest enforcement before torch.load
-# ---------------------------------------------------------------------------
+            def exec_batch(idx):
+                seen["value"] = os.path.exists(snap)
+                rec.exec_batch(idx)
+
+            rec = Recorder()
+            env = make_env(n_train=4656, batch_size=512, target_steps=2001)
+            run_state.run_training_loop(
+                state,
+                env,
+                exec_batch,
+                lambda: rec.draw_perm(4656),
+                rec.eval_and_log,
+                lambda v: None,
+                writer,
+                lambda: False,
+            )
+            self.assertTrue(seen["value"])
 
 
 class TestResolveSuppliedDigest(unittest.TestCase):
     def _setup(self, tmp):
         import os, hashlib
+
         rd = os.path.join(tmp, "seed0")
         os.makedirs(rd)
         csv_path = os.path.join(rd, "metrics.csv")
         latest_path = os.path.join(rd, "latest.pt")
         snap_dir = os.path.join(rd, "snapshots")
         os.makedirs(snap_dir)
-        # write a trivial checkpoint file (bytes)
         with open(latest_path, "wb") as f:
             f.write(b"checkpoint-bytes")
         real_hash = hashlib.sha256(open(latest_path, "rb").read()).hexdigest()
+        # close file handle by recompute via context
+        with open(latest_path, "rb") as f:
+            real_hash = hashlib.sha256(f.read()).hexdigest()
         return rd, csv_path, latest_path, snap_dir, real_hash
 
-    def test_bad_digests_block_load(self):
-        import os
-        from unittest.mock import patch
-        h = "a" * 64
-        bad_cases = {
-            "missing": {},
-            "null": {"checkpoint_sha256": None},
-            "malformed": {"checkpoint_sha256": "not-hex"},
-            "wrong": {"checkpoint_sha256": "b" * 64},
-            "alias_only": {"checkpoint_hash": h},
-            "conflicting_alias": {"checkpoint_sha256": h, "sha256": h},
+    def _prov(self, rd, real_hash, overrides=None):
+        exp = make_exp()
+        prov = {
+            "seed": 0,
+            "global_step": 1,
+            "epoch": 0,
+            "checkpoint_sha256": real_hash,
+            "run_identity": exp["identity"],
+            "run_identity_hash": exp["identity"]["run_identity_hash"],
         }
-        for name, prov in bad_cases.items():
+        if overrides:
+            prov.update(overrides)
+        return prov, exp
+
+    def test_bad_supplied_sidecars_block_load(self):
+        from unittest.mock import patch
+
+        bad_cases = [
+            ({}, "missing"),
+            ({"checkpoint_sha256": None}, "null"),
+            ({"checkpoint_sha256": "not-hex"}, "malformed"),
+            ({"checkpoint_sha256": "b" * 64}, "wrong"),
+            ({"checkpoint_hash": "a" * 64}, "alias-only"),
+            ({"checkpoint_sha256": "a" * 64, "sha256": "a" * 64}, "conflicting-alias"),
+            ("not-a-dict", "invalid-type"),
+        ]
+        for overrides, label in bad_cases:
             with TempDirs() as tmp:
                 rd, csv_path, latest_path, snap_dir, real_hash = self._setup(tmp)
-                prov = dict(prov)
-                # for wrong/alias cases adjust hash to real? keep as specified
-                if name == "wrong":
-                    prov["checkpoint_sha256"] = "b" * 64
-                if name in ("alias_only", "conflicting_alias"):
-                    # canonical missing or conflicting
-                    pass
-                # attach identity for legacy-ish provenance
-                exp = make_exp()
-                prov.setdefault("seed", 0)
-                prov.setdefault("global_step", 1)
-                prov.setdefault("epoch", 0)
-                prov.setdefault("run_identity", exp["identity"])
-                prov.setdefault("run_identity_hash", exp["identity"]["run_identity_hash"])
-                # if missing canonical, remove
-                if name == "missing":
-                    prov.pop("checkpoint_sha256", None)
-                sentinel = RuntimeError("torch.load must not be called")
-                with patch("torch.load", side_effect=sentinel):
-                    with self.assertRaises(Exception):
+                if overrides == "not-a-dict":
+                    prov = "not-a-dict"
+                else:
+                    prov, exp = self._prov(rd, real_hash, overrides)
+                    if label == "missing":
+                        prov.pop("checkpoint_sha256", None)
+                mock_load = patch("torch.load")
+                with mock_load as ml:
+                    ml.side_effect = RuntimeError("must not load")
+                    with self.assertRaises(run_state.LegacyCheckpointRefused):
                         train.resolve_run_mode(
                             rd, csv_path, latest_path, snap_dir, make_exp(), prov
                         )
+                    ml.assert_not_called()
 
-    def test_correct_digest_loads(self):
-        import os
+    def test_correct_supplied_digest_resolves(self):
         from unittest.mock import patch
+        import torch
+
         with TempDirs() as tmp:
             rd, csv_path, latest_path, snap_dir, real_hash = self._setup(tmp)
+            # write a valid current-schema checkpoint
             exp = make_exp()
+            ckpt_path = latest_path
+            st = make_state(
+                epoch=0,
+                current_perm=list(range(4656)),
+                batch_cursor=1,
+                global_step=1,
+                next_eval_epoch=1,
+            )
+            view = run_state.save_view(st.epoch, st.current_perm, st.batch_cursor, 10)
+            e_s, p_s, c_s, done = view
+            train._atomic_save(
+                lambda p: train.save_ckpt(
+                    p,
+                    FakeModel(),
+                    FakeOpt(),
+                    e_s,
+                    1,
+                    1,
+                    torch.device("cpu"),
+                    train.rng_capture(),
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    p_s,
+                    c_s,
+                    10,
+                    done,
+                    0,
+                    239,
+                ),
+                ckpt_path,
+            )
+            real_hash = (
+                __import__("hashlib").sha256(open(ckpt_path, "rb").read()).hexdigest()
+            )
             prov = {
-                "seed": 0, "global_step": 1, "epoch": 0,
+                "seed": 0,
+                "global_step": 1,
+                "epoch": 0,
                 "checkpoint_sha256": real_hash,
                 "run_identity": exp["identity"],
                 "run_identity_hash": exp["identity"]["run_identity_hash"],
             }
-            # patch torch.load to return a minimal ckpt? It will fail validation but load called.
-            # We only assert load is reached by allowing it to raise validation, not sentinel.
-            with patch("torch.load", side_effect=RuntimeError("loaded")):
-                with self.assertRaises(RuntimeError) as ctx:
-                    train.resolve_run_mode(rd, csv_path, latest_path, snap_dir, make_exp(), prov)
-                self.assertEqual(str(ctx.exception), "loaded")
+            mode, plan, insp, ckpt = train.resolve_run_mode(
+                rd, csv_path, latest_path, snap_dir, make_exp(), prov
+            )
+            self.assertEqual(mode, "resume")
 
+    def test_no_sidecar_trusted_local_still_works(self):
+        import os, torch
 
-# ---------------------------------------------------------------------------
-# R4: strict arithmetic/MPS/zero-state/catch-up coverage
-# ---------------------------------------------------------------------------
+        with TempDirs() as tmp:
+            rd = os.path.join(tmp, "seed0")
+            os.makedirs(rd)
+            csv_path = os.path.join(rd, "metrics.csv")
+            latest_path = os.path.join(rd, "latest.pt")
+            snap_dir = os.path.join(rd, "snapshots")
+            os.makedirs(snap_dir)
+            exp = make_exp()
+            st = make_state(
+                epoch=0,
+                current_perm=list(range(4656)),
+                batch_cursor=1,
+                global_step=1,
+                next_eval_epoch=1,
+            )
+            view = run_state.save_view(st.epoch, st.current_perm, st.batch_cursor, 10)
+            e_s, p_s, c_s, done = view
+            train._atomic_save(
+                lambda p: train.save_ckpt(
+                    p,
+                    FakeModel(),
+                    FakeOpt(),
+                    e_s,
+                    1,
+                    1,
+                    torch.device("cpu"),
+                    train.rng_capture(),
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    p_s,
+                    c_s,
+                    10,
+                    done,
+                    0,
+                    239,
+                ),
+                latest_path,
+            )
+            mode, plan, insp, ckpt = train.resolve_run_mode(
+                rd, csv_path, latest_path, snap_dir, make_exp(), None
+            )
+            self.assertEqual(mode, "resume")
+
+    def test_identity_negatives(self):
+        import os, torch, hashlib
+
+        with TempDirs() as tmp:
+            rd = os.path.join(tmp, "seed0")
+            os.makedirs(rd)
+            csv_path = os.path.join(rd, "metrics.csv")
+            latest_path = os.path.join(rd, "latest.pt")
+            snap_dir = os.path.join(rd, "snapshots")
+            os.makedirs(snap_dir)
+            exp = make_exp()
+            ckpt = legacy_ckpt(epoch=0, global_step=10, next_eval_epoch=1)
+            # make boundary-valid: epoch0 global_step10 => 1*10 boundary, but legacy requires >=1 and bd_implied=10 ok
+            torch.save(ckpt, latest_path)
+            real_hash = hashlib.sha256(open(latest_path, "rb").read()).hexdigest()
+            base_prov = {
+                "seed": 0,
+                "global_step": 10,
+                "epoch": 0,
+                "checkpoint_sha256": real_hash,
+                "run_identity": exp["identity"],
+                "run_identity_hash": exp["identity"]["run_identity_hash"],
+            }
+            # missing identity
+            p1 = dict(base_prov)
+            p1.pop("run_identity")
+            with self.assertRaises(run_state.LegacyCheckpointRefused):
+                train.resolve_run_mode(
+                    rd, csv_path, latest_path, snap_dir, make_exp(), p1
+                )
+            # missing hash
+            p2 = dict(base_prov)
+            p2.pop("run_identity_hash")
+            with self.assertRaises(run_state.LegacyCheckpointRefused):
+                train.resolve_run_mode(
+                    rd, csv_path, latest_path, snap_dir, make_exp(), p2
+                )
+            # wrong identity
+            p3 = dict(base_prov)
+            p3["run_identity"] = dict(exp["identity"], seed=1)
+            with self.assertRaises(run_state.LegacyCheckpointRefused):
+                train.resolve_run_mode(
+                    rd, csv_path, latest_path, snap_dir, make_exp(), p3
+                )
+            # wrong hash
+            p4 = dict(base_prov)
+            p4["run_identity_hash"] = "b" * 64
+            with self.assertRaises(run_state.LegacyCheckpointRefused):
+                train.resolve_run_mode(
+                    rd, csv_path, latest_path, snap_dir, make_exp(), p4
+                )
 
 
 class TestStrictArithmeticCoverage(unittest.TestCase):
@@ -1999,7 +2194,9 @@ class TestSyntheticHistoricalFields(unittest.TestCase):
     def prov(self, epoch, gs):
         exp = make_exp(seed=0)
         return {
-            "seed": 0, "global_step": gs, "epoch": epoch,
+            "seed": 0,
+            "global_step": gs,
+            "epoch": epoch,
             "checkpoint_sha256": "a" * 64,
             "run_identity": exp["identity"],
             "run_identity_hash": exp["identity"]["run_identity_hash"],
@@ -2008,7 +2205,9 @@ class TestSyntheticHistoricalFields(unittest.TestCase):
     def test_synthetic_27520_fields(self):
         ckpt = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2751)
         plan = run_state.validate_legacy_checkpoint(
-            ckpt, make_exp(seed=0), self.prov(2751, 27520),
+            ckpt,
+            make_exp(seed=0),
+            self.prov(2751, 27520),
             checkpoint_sha256="a" * 64,
         )
         self.assertEqual(plan["start_epoch"], 2752)
@@ -2017,8 +2216,53 @@ class TestSyntheticHistoricalFields(unittest.TestCase):
     def test_synthetic_28070_fields(self):
         ckpt = legacy_ckpt(epoch=2806, global_step=28070, next_eval_epoch=2806)
         plan = run_state.validate_legacy_checkpoint(
-            ckpt, make_exp(seed=0), self.prov(2806, 28070),
+            ckpt,
+            make_exp(seed=0),
+            self.prov(2806, 28070),
             checkpoint_sha256="a" * 64,
         )
         self.assertEqual(plan["start_epoch"], 2807)
         self.assertEqual(plan["next_eval_epoch"], run_state.first_due_eval_epoch(2807))
+
+
+# ---------------------------------------------------------------------------
+# B4: stale eval pointer -> serialization -> validation -> resume
+# ---------------------------------------------------------------------------
+
+
+class TestCatchupRoundtrip(unittest.TestCase):
+    def test_stale_pointer_serializes_validates_resumes(self):
+        import os, torch
+        with TempDirs() as tmp:
+            rd = os.path.join(tmp, "seed0")
+            os.makedirs(rd)
+            latest_path = os.path.join(rd, "latest.pt")
+            exp = make_exp()
+            # in-progress epoch 2, cursor 3, stale pointer 1
+            perm = list(range(4656))[::-1]
+            st = make_state(epoch=2, current_perm=perm, batch_cursor=3,
+                            global_step=2*10+3, next_eval_epoch=1)
+            view = run_state.save_view(st.epoch, st.current_perm, st.batch_cursor, 10)
+            e_s, p_s, c_s, done = view
+            train._atomic_save(
+                lambda p: train.save_ckpt(
+                    p, FakeModel(), FakeOpt(), e_s, st.global_step, 1,
+                    torch.device("cpu"), train.rng_capture(), "cfg-hash-test",
+                    "tok-hash-test", exp["identity"], p_s, c_s, 10, done, 0, 239,
+                ),
+                latest_path,
+            )
+            ckpt = torch.load(latest_path, map_location="cpu", weights_only=False)
+            # fix pointer to stale 1 in ckpt
+            ckpt["next_eval_epoch"] = 1
+            torch.save(ckpt, latest_path)
+            # validation should reject stale pointer
+            with self.assertRaises(run_state.CheckpointError):
+                run_state.validate_current_checkpoint(ckpt, exp)
+            # now set coherent pointer and re-save
+            ckpt["next_eval_epoch"] = run_state.first_due_eval_epoch(2)
+            torch.save(ckpt, latest_path)
+            ckpt2 = torch.load(latest_path, map_location="cpu", weights_only=False)
+            v = run_state.validate_current_checkpoint(ckpt2, exp)
+            plan = run_state.plan_current_resume(v)
+            self.assertGreaterEqual(plan["next_eval_epoch"], 2)

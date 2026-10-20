@@ -203,11 +203,16 @@ class TestSchedule(unittest.TestCase):
             "seed": 0,
             "global_step": 28070,
             "epoch": 2806,
-            "checkpoint_sha256": "test-hash",
+            "checkpoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "run_identity": exp["identity"],
+            "run_identity_hash": exp["identity"]["run_identity_hash"],
         }
         ckpt = legacy_ckpt(epoch=2806, global_step=28070, next_eval_epoch=2806)
         plan = run_state.validate_legacy_checkpoint(
-            ckpt, exp, prov, checkpoint_sha256="test-hash"
+            ckpt,
+            exp,
+            prov,
+            checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         self.assertEqual(plan["start_epoch"], 2807)
         # stored pointer == epoch is pre-update/stale -> normalized to the
@@ -223,9 +228,11 @@ class TestSchedule(unittest.TestCase):
                 "seed": 0,
                 "global_step": 27520,
                 "epoch": 2751,
-                "checkpoint_sha256": "test-hash",
+                "checkpoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "run_identity": exp["identity"],
+                "run_identity_hash": exp["identity"]["run_identity_hash"],
             },
-            checkpoint_sha256="test-hash",
+            checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         # post-update pointer (> epoch) is kept as recorded
         self.assertEqual(plan2["next_eval_epoch"], 2806)
@@ -924,17 +931,23 @@ class TestLegacyValidation(unittest.TestCase):
         cls.EXP = make_exp(seed=0)
 
     def prov(self, epoch, gs, seed=0):
+        exp = self.EXP
         return {
             "seed": seed,
             "global_step": gs,
             "epoch": epoch,
-            "checkpoint_sha256": "test-hash",
+            "checkpoint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "run_identity": exp["identity"],
+            "run_identity_hash": exp["identity"]["run_identity_hash"],
         }
 
     def test_known_pause_27520_boundary_accepted(self):
         ckpt = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2806)
         plan = run_state.validate_legacy_checkpoint(
-            ckpt, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+            ckpt,
+            self.EXP,
+            self.prov(2751, 27520),
+            checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         self.assertEqual(plan["start_epoch"], 2752)
         self.assertEqual(plan["global_step"], 27520)
@@ -945,7 +958,10 @@ class TestLegacyValidation(unittest.TestCase):
     def test_known_pause_28070_stale_pointer_normalized(self):
         ckpt = legacy_ckpt(epoch=2806, global_step=28070, next_eval_epoch=2806)
         plan = run_state.validate_legacy_checkpoint(
-            ckpt, self.EXP, self.prov(2806, 28070), checkpoint_sha256="test-hash"
+            ckpt,
+            self.EXP,
+            self.prov(2806, 28070),
+            checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         self.assertEqual(plan["start_epoch"], 2807)
         self.assertEqual(plan["next_eval_epoch"], run_state.first_due_eval_epoch(2807))
@@ -965,22 +981,31 @@ class TestLegacyValidation(unittest.TestCase):
                 ckpt,
                 self.EXP,
                 self.prov(2751, 27520, seed=1),
-                checkpoint_sha256="test-hash",
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27510), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27510),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2750, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2750, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_midepoch_legacy_refused(self):
         ckpt = legacy_ckpt(epoch=2751, global_step=27515, next_eval_epoch=2751)
         with self.assertRaises(run_state.LegacyCheckpointRefused) as ctx:
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27515), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27515),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         self.assertIn("mid-epoch", str(ctx.exception))
 
@@ -988,7 +1013,10 @@ class TestLegacyValidation(unittest.TestCase):
         ckpt = legacy_ckpt(epoch=2752, global_step=27520, next_eval_epoch=2801)
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2752, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2752, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_missing_identity_refused(self):
@@ -996,13 +1024,19 @@ class TestLegacyValidation(unittest.TestCase):
         del ckpt["epoch"]
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         ckpt2 = legacy_ckpt(epoch=2751, global_step=27520, next_eval_epoch=2806)
         del ckpt2["global_step"]
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt2, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+                ckpt2,
+                self.EXP,
+                self.prov(2751, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_batch_idx_contradiction_refused_missing_accepted(self):
@@ -1011,14 +1045,20 @@ class TestLegacyValidation(unittest.TestCase):
         )
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
         ckpt2 = legacy_ckpt(
             epoch=2751, global_step=27520, next_eval_epoch=2806, batch_idx=None
         )
         ckpt2.pop("batch_idx")
         plan = run_state.validate_legacy_checkpoint(
-            ckpt2, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+            ckpt2,
+            self.EXP,
+            self.prov(2751, 27520),
+            checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )
         self.assertEqual(plan["start_epoch"], 2752)
 
@@ -1028,7 +1068,10 @@ class TestLegacyValidation(unittest.TestCase):
         )
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_missing_rng_refused(self):
@@ -1037,7 +1080,10 @@ class TestLegacyValidation(unittest.TestCase):
         )
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_cfg_hash_mismatch_refused(self):
@@ -1046,14 +1092,20 @@ class TestLegacyValidation(unittest.TestCase):
         )
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 27520), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 27520),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_inconsistent_step_epoch_arithmetic_refused(self):
         ckpt = legacy_ckpt(epoch=2751, global_step=99999, next_eval_epoch=2806)
         with self.assertRaises(run_state.LegacyCheckpointRefused):
             run_state.validate_legacy_checkpoint(
-                ckpt, self.EXP, self.prov(2751, 99999), checkpoint_sha256="test-hash"
+                ckpt,
+                self.EXP,
+                self.prov(2751, 99999),
+                checkpoint_sha256="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
 
     def test_future_schema_not_treated_as_legacy(self):
@@ -1507,3 +1559,152 @@ class TestAnalysisSafety(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ---------------------------------------------------------------------------
+# Real production artifact-obligation writer (not recorder call-counts)
+# ---------------------------------------------------------------------------
+
+
+class TestObligationWriterReal(unittest.TestCase):
+    def test_snapshot_and_seed0_backup_written_and_idempotent(self):
+        with TempDirs() as tmp:
+            run_dir = os.path.join(tmp, "seed0")
+            snap_dir = os.path.join(run_dir, "snapshots")
+            os.makedirs(snap_dir)
+            state = make_state(
+                epoch=200,
+                current_perm=None,
+                batch_cursor=0,
+                global_step=2000,
+                next_eval_epoch=201,
+            )
+            model = FakeModel()
+            opt = FakeOpt()
+            exp = make_exp()
+
+            def full_saver_for_view(view):
+                rngs = train.rng_capture()
+                return train.make_full_saver(
+                    state,
+                    model,
+                    opt,
+                    view,
+                    torch.device("cpu"),
+                    rngs,
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    10,
+                    0,
+                    239,
+                )
+
+            writer = train.make_obligation_writer(
+                state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
+            )
+            writer()
+            snap = os.path.join(snap_dir, "snapshot_step2000.pt")
+            backup = os.path.join(run_dir, "seed0_step2000.pt")
+            self.assertTrue(os.path.exists(snap))
+            self.assertTrue(os.path.exists(backup))
+            snap_payload = torch.load(snap, weights_only=True)
+            self.assertEqual(snap_payload["step"], 2000)
+            self.assertEqual(snap_payload["seed"], 0)
+            self.assertEqual(set(snap_payload["state_dict"].keys()), {"w"})
+            # idempotent: existing files are not rewritten
+            snap_size = os.path.getsize(snap)
+            backup_size = os.path.getsize(backup)
+            writer()
+            self.assertEqual(os.path.getsize(snap), snap_size)
+            self.assertEqual(os.path.getsize(backup), backup_size)
+
+
+# ---------------------------------------------------------------------------
+# Actual main() no-op orchestration (read-only destination)
+# ---------------------------------------------------------------------------
+
+
+class TestMainNoOpOrchestration(unittest.TestCase):
+    def test_completed_target_exits_without_mutation_or_workload(self):
+        import hashlib
+        import sys
+        from unittest.mock import patch
+
+        with TempDirs() as tmp:
+            run_dir = os.path.join(tmp, "seed0")
+            os.makedirs(run_dir)
+            exp = make_exp()
+            ckpt_path = os.path.join(run_dir, "latest.pt")
+            st = make_state(
+                epoch=9909,
+                current_perm=None,
+                batch_cursor=0,
+                global_step=99090,
+                next_eval_epoch=9971,
+            )
+            view = run_state.save_view(st.epoch, st.current_perm, st.batch_cursor, 10)
+            e_s, p_s, c_s, done = view
+            train._atomic_save(
+                lambda p: train.save_ckpt(
+                    p,
+                    FakeModel(),
+                    FakeOpt(),
+                    e_s,
+                    99090,
+                    9971,
+                    torch.device("cpu"),
+                    train.rng_capture(),
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    p_s,
+                    c_s,
+                    10,
+                    done,
+                    0,
+                    239,
+                ),
+                ckpt_path,
+            )
+
+            def inventory(root):
+                out = {}
+                for dp, _, files in os.walk(root):
+                    for f in files:
+                        fp = os.path.join(dp, f)
+                        out[os.path.relpath(fp, root)] = hashlib.sha256(
+                            open(fp, "rb").read()
+                        ).hexdigest()
+                return out
+
+            before = inventory(run_dir)
+            fake_data = (torch.zeros(4656, 17), torch.zeros(100, 17), ["t"] * 239)
+
+            def sentinel(*a, **k):
+                raise AssertionError("workload constructor must not be called")
+
+            old_argv = sys.argv
+            sys.argv = [
+                "train.py",
+                "--seed",
+                "0",
+                "--steps",
+                "99090",
+                "--run-dir",
+                run_dir,
+            ]
+            try:
+                with (
+                    patch("train.build_split", return_value=fake_data),
+                    patch("train.hash_config_split", return_value="cfg-hash-test"),
+                    patch("train.tokenizer_hash", return_value="tok-hash-test"),
+                    patch("train.Transformer", side_effect=sentinel),
+                    patch("torch.optim.AdamW", side_effect=sentinel),
+                ):
+                    train.main()
+            finally:
+                sys.argv = old_argv
+
+            after = inventory(run_dir)
+            self.assertEqual(before, after)

@@ -255,13 +255,43 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
     """
     insp = inspect_destination(run_dir, csv_path, latest_path, snap_dir)
     if insp["latest_exists"]:
+        # Hash the selected local file before deserialization. When a
+        # provenance digest is supplied (legacy path), verify it before
+        # torch.load so a mismatching/malformed sidecar cannot trigger a load.
+        ckpt_hash = file_sha256(latest_path)
+        if isinstance(provenance, dict):
+            hash_aliases = (
+                "checkpoint_sha256",
+                "checkpoint_hash",
+                "sha256",
+                "file_sha256",
+            )
+            prov_hash = None
+            for alias in hash_aliases:
+                if alias in provenance:
+                    prov_hash = provenance.get(alias)
+                    break
+            if prov_hash is not None:
+                if (
+                    not isinstance(prov_hash, str)
+                    or len(prov_hash) != 64
+                    or any(c not in "0123456789abcdef" for c in prov_hash.lower())
+                ):
+                    raise run_state.LegacyCheckpointRefused(
+                        "provenance checkpoint digest %r is not a 64-hex SHA-256"
+                        % (prov_hash,)
+                    )
+                if prov_hash != ckpt_hash:
+                    raise run_state.LegacyCheckpointRefused(
+                        "checkpoint SHA-256 %r does not match provenance record %r"
+                        % (ckpt_hash, prov_hash)
+                    )
         # Full checkpoints embed RNG tuples/ndarrays that the restricted
         # (weights_only=True) loader rejects; weights_only=False here is
         # therefore scoped to trusted local full checkpoints only and must not
         # be generalized to unknown files. Model-only snapshots use restricted
         # loading in evaluate_endpoints.py.
         ckpt = torch.load(latest_path, map_location="cpu", weights_only=False)
-        ckpt_hash = file_sha256(latest_path)
         plan = run_state.plan_resume_from_checkpoint(
             ckpt, exp, provenance, checkpoint_sha256=ckpt_hash
         )
@@ -269,6 +299,65 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
         return "resume", plan, insp, ckpt
     run_state.validate_fresh_destination(insp)
     return "fresh", run_state.fresh_plan(), insp, None
+
+
+def make_full_saver(state, model, optimizer, view, device, rngs, cfg_hash, tok_hash,
+                   identity, n_batches, seed, vocab):
+    """Build a save function for one normalized view (shared by main and tests)."""
+    epoch_s, perm_s, cursor_s, completed = view
+
+    def _save(p):
+        save_ckpt(
+            p,
+            model,
+            optimizer,
+            epoch_s,
+            state.global_step,
+            state.next_eval_epoch,
+            device,
+            rngs,
+            cfg_hash,
+            tok_hash,
+            identity,
+            perm_s,
+            cursor_s,
+            n_batches,
+            completed,
+            seed,
+            vocab,
+            state.migrated_legacy,
+        )
+
+    return _save
+
+
+def make_obligation_writer(state, model, run_dir, snap_dir, seed, n_batches,
+                           full_saver_for_view):
+    """Production artifact-obligation writer (model-only snapshots + seed0/2000)."""
+
+    def write_obligations():
+        gs = state.global_step
+        if gs in SNAPSHOT_STEPS:
+            sp = os.path.join(snap_dir, "snapshot_step%d.pt" % gs)
+            if not os.path.exists(sp):
+
+                def _snap(p):
+                    torch.save(
+                        {"state_dict": model.state_dict(), "step": gs, "seed": seed}, p
+                    )
+
+                _atomic_save(_snap, sp)
+                print("saved snapshot %s" % sp, flush=True)
+        if seed == 0 and gs == 2000:
+            p2000 = os.path.join(run_dir, "seed0_step2000.pt")
+            if not os.path.exists(p2000):
+                view = run_state.save_view(
+                    state.epoch, state.current_perm, state.batch_cursor, n_batches
+                )
+                _atomic_save(full_saver_for_view(view), p2000)
+                print("saved %s" % p2000, flush=True)
+
+    return write_obligations
 
 
 def main():
@@ -436,69 +525,34 @@ def main():
             flush=True,
         )
 
-    def make_full_saver(view):
-        epoch_s, perm_s, cursor_s, completed = view
+    def full_saver_for_view(view):
         rngs = rng_capture()
-
-        def _save(p):
-            save_ckpt(
-                p,
-                model,
-                optimizer,
-                epoch_s,
-                state.global_step,
-                state.next_eval_epoch,
-                device,
-                rngs,
-                cfg_hash,
-                tok_hash,
-                identity,
-                perm_s,
-                cursor_s,
-                n_batches,
-                completed,
-                seed,
-                vocab,
-                state.migrated_legacy,
-            )
-
-        return _save
+        return make_full_saver(
+            state,
+            model,
+            optimizer,
+            view,
+            device,
+            rngs,
+            cfg_hash,
+            tok_hash,
+            identity,
+            n_batches,
+            seed,
+            vocab,
+        )
 
     def save_latest(view):
-        _atomic_save(make_full_saver(view), latest_path)
+        _atomic_save(full_saver_for_view(view), latest_path)
         print(
             "checkpoint saved: step %d epoch %s completed=%s"
             % (state.global_step, view[0], view[3]),
             flush=True,
         )
 
-    def write_obligations():
-        """Write due-but-missing artifacts for exactly the current step.
-
-        Idempotent (existence-checked) and atomic, so bookkeeping can never be
-        skipped at a stop step nor emitted twice. Model-only snapshots keep
-        their historical model-only type; no optimizer state is invented.
-        """
-        gs = state.global_step
-        if gs in SNAPSHOT_STEPS:
-            sp = os.path.join(snap_dir, "snapshot_step%d.pt" % gs)
-            if not os.path.exists(sp):
-
-                def _snap(p):
-                    torch.save(
-                        {"state_dict": model.state_dict(), "step": gs, "seed": seed}, p
-                    )
-
-                _atomic_save(_snap, sp)
-                print("saved snapshot %s" % sp, flush=True)
-        if seed == 0 and gs == 2000:
-            p2000 = os.path.join(run_dir, "seed0_step2000.pt")
-            if not os.path.exists(p2000):
-                view = run_state.save_view(
-                    state.epoch, state.current_perm, state.batch_cursor, n_batches
-                )
-                _atomic_save(make_full_saver(view), p2000)
-                print("saved %s" % p2000, flush=True)
+    write_obligations = make_obligation_writer(
+        state, model, run_dir, snap_dir, seed, n_batches, full_saver_for_view
+    )
 
     if args.segment_steps is not None:
         target_steps = min(args.steps, state.global_step + args.segment_steps)

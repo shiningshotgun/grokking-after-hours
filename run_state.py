@@ -550,15 +550,28 @@ def validate_legacy_checkpoint(ckpt, exp, provenance, checkpoint_sha256=None):
             "without a trusted provenance record (--legacy-provenance JSON with "
             "seed, global_step, epoch recorded from the run's logs)"
         )
+    if not _is_int(provenance.get("seed")):
+        raise LegacyCheckpointRefused(
+            "provenance seed must be an int (got %r)" % (provenance.get("seed"),)
+        )
     if provenance.get("seed") != exp["seed"]:
         raise LegacyCheckpointRefused(
             "provenance seed %r does not match requested seed %r"
             % (provenance.get("seed"), exp["seed"])
         )
+    if not _is_int(provenance.get("global_step")):
+        raise LegacyCheckpointRefused(
+            "provenance global_step must be an int (got %r)"
+            % (provenance.get("global_step"),)
+        )
     if provenance.get("global_step") != gs:
         raise LegacyCheckpointRefused(
             "provenance global_step %r does not match checkpoint global_step %r"
             % (provenance.get("global_step"), gs)
+        )
+    if not _is_int(provenance.get("epoch")):
+        raise LegacyCheckpointRefused(
+            "provenance epoch must be an int (got %r)" % (provenance.get("epoch"),)
         )
     if provenance.get("epoch") != epoch:
         raise LegacyCheckpointRefused(
@@ -579,27 +592,50 @@ def validate_legacy_checkpoint(ckpt, exp, provenance, checkpoint_sha256=None):
             "(expected one of %s); a sidecar repeating seed/epoch/step does "
             "not bind those claims to checkpoint bytes" % ", ".join(hash_aliases)
         )
+    if not isinstance(prov_hash, str) or len(prov_hash) != 64 or any(
+        c not in "0123456789abcdef" for c in prov_hash.lower()
+    ):
+        raise LegacyCheckpointRefused(
+            "provenance checkpoint digest %r is not a 64-hex SHA-256" % (prov_hash,)
+        )
     if checkpoint_sha256 is None:
         raise LegacyCheckpointRefused(
             "checkpoint file hash was not provided for verification; refuse "
             "migration without hashing the selected checkpoint"
+        )
+    if not isinstance(checkpoint_sha256, str) or len(checkpoint_sha256) != 64 or any(
+        c not in "0123456789abcdef" for c in checkpoint_sha256.lower()
+    ):
+        raise LegacyCheckpointRefused(
+            "supplied checkpoint digest %r is not a 64-hex SHA-256"
+            % (checkpoint_sha256,)
         )
     if prov_hash != checkpoint_sha256:
         raise LegacyCheckpointRefused(
             "checkpoint SHA-256 %r does not match provenance record %r"
             % (checkpoint_sha256, prov_hash)
         )
-    # Run-identity evidence beyond the legacy format's missing fields.
-    if isinstance(provenance, dict) and "run_identity" in provenance:
-        if provenance.get("run_identity") != exp["identity"]:
-            raise LegacyCheckpointRefused(
-                "provenance run_identity does not match this run's identity"
-            )
-    if isinstance(provenance, dict) and "run_identity_hash" in provenance:
-        if provenance.get("run_identity_hash") != exp["identity"]["run_identity_hash"]:
-            raise LegacyCheckpointRefused(
-                "provenance run_identity_hash does not match this run's identity"
-            )
+    # Run-identity evidence is REQUIRED for legacy migration (not optional).
+    if not isinstance(provenance.get("run_identity"), dict):
+        raise LegacyCheckpointRefused(
+            "trusted provenance record lacks required run_identity"
+        )
+    if provenance.get("run_identity") != exp["identity"]:
+        raise LegacyCheckpointRefused(
+            "provenance run_identity does not match this run's identity"
+        )
+    if not isinstance(provenance.get("run_identity_hash"), str):
+        raise LegacyCheckpointRefused(
+            "trusted provenance record lacks required run_identity_hash"
+        )
+    if provenance.get("run_identity_hash") != exp["identity"]["run_identity_hash"]:
+        raise LegacyCheckpointRefused(
+            "provenance run_identity_hash does not match this run's identity"
+        )
+    if identity_hash(provenance.get("run_identity")) != provenance.get("run_identity_hash"):
+        raise LegacyCheckpointRefused(
+            "provenance run_identity_hash does not match run_identity contents"
+        )
     # Epoch-boundary arithmetic under the original fixed 10-batch schedule.
     nb = ORIGINAL_LEGACY_N_BATCHES
     if exp["n_batches"] != nb:

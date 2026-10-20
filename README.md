@@ -180,6 +180,33 @@ unused `--out` path (the tool refuses to overwrite existing files).
 - Upstream license notice retained in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - Paper: https://arxiv.org/abs/2201.02177
 
+## Plots
+
+Training and validation curves for all three seeds:
+
+![Line chart of training and validation accuracy versus training step (log scale) for seeds 0, 1 and 2, showing the grokking transition and repeated late-training dips](plots/accuracy_curves.png)
+
+*Accuracy (%) versus step (log scale) for train (solid) and validation
+(dashed) series of seeds 0, 1 and 2. Training accuracy climbs from near 0%
+to ~100% by roughly step 1,000, while validation accuracy stays near 0%
+until ~2,000–4,000 steps and then rises abruptly to ~100% (the grokking
+transition). All seeds then show repeated sharp train/validation dips and
+recoveries; near the end, seed 0 hovers around 20–40% and seed 1 ends in a
+deep dip, while seed 2 stays near 100%.*
+
+![Line chart of training and validation cross-entropy loss versus training step (log scale) for seeds 0, 1 and 2](plots/loss_curves.png)
+
+*Cross-entropy loss versus step (log scale) for the same six series.
+Validation loss climbs to a broad peak (~2.5–3.1) around steps 500–1,300
+while training loss falls from ~3.2; both then collapse toward 0 as grokking
+completes. After that the losses stay near 0 with frequent spikes, including
+a sustained late elevation for seed 0.*
+
+Both figures are plotted from the retained `runs/seed{0,1,2}/metrics.csv`,
+which have last-logged semantics (~98.9–99.1k steps), not the measured
+100,000-step endpoints, and the repeated post-grokking dips and recoveries
+visible in all seeds have no established cause.
+
 ## Status
 
 Seeds 0, 1, 2 ran to 100,000 steps. True 100k-step endpoints were measured

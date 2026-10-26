@@ -28,6 +28,7 @@ import torch
 import torch.nn.functional as F
 
 import run_state
+from probe_utils import canonical_state_hash
 from data import build_split, ArithmeticTokenizer
 from model import Transformer
 
@@ -264,14 +265,18 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
                 raise run_state.LegacyCheckpointRefused(
                     "supplied provenance must be a JSON object"
                 )
-            if any(a in provenance for a in ("checkpoint_hash", "sha256", "file_sha256")):
+            if any(
+                a in provenance for a in ("checkpoint_hash", "sha256", "file_sha256")
+            ):
                 raise run_state.LegacyCheckpointRefused(
                     "provenance uses a non-canonical digest key; only "
                     "'checkpoint_sha256' is accepted"
                 )
             prov_hash = provenance.get("checkpoint_sha256")
-            if not isinstance(prov_hash, str) or len(prov_hash) != 64 or any(
-                c not in "0123456789abcdef" for c in prov_hash.lower()
+            if (
+                not isinstance(prov_hash, str)
+                or len(prov_hash) != 64
+                or any(c not in "0123456789abcdef" for c in prov_hash.lower())
             ):
                 raise run_state.LegacyCheckpointRefused(
                     "supplied provenance requires a 64-hex checkpoint_sha256"
@@ -296,8 +301,20 @@ def resolve_run_mode(run_dir, csv_path, latest_path, snap_dir, exp, provenance):
     return "fresh", run_state.fresh_plan(), insp, None
 
 
-def make_full_saver(state, model, optimizer, view, device, rngs, cfg_hash, tok_hash,
-                   identity, n_batches, seed, vocab):
+def make_full_saver(
+    state,
+    model,
+    optimizer,
+    view,
+    device,
+    rngs,
+    cfg_hash,
+    tok_hash,
+    identity,
+    n_batches,
+    seed,
+    vocab,
+):
     """Build a save function for one normalized view (shared by main and tests)."""
     epoch_s, perm_s, cursor_s, completed = view
 
@@ -326,8 +343,9 @@ def make_full_saver(state, model, optimizer, view, device, rngs, cfg_hash, tok_h
     return _save
 
 
-def make_obligation_writer(state, model, run_dir, snap_dir, seed, n_batches,
-                           full_saver_for_view):
+def make_obligation_writer(
+    state, model, run_dir, snap_dir, seed, n_batches, full_saver_for_view
+):
     """Production artifact-obligation writer (model-only snapshots + seed0/2000)."""
 
     def write_obligations():
@@ -355,13 +373,27 @@ def make_obligation_writer(state, model, run_dir, snap_dir, seed, n_batches,
     return write_obligations
 
 
-def continue_with_recovery(state, env, exec_batch, draw_perm, eval_and_log,
-                           save_latest, write_obligations, stop_requested):
+def continue_with_recovery(
+    state,
+    env,
+    exec_batch,
+    draw_perm,
+    eval_and_log,
+    save_latest,
+    write_obligations,
+    stop_requested,
+):
     """Production recovery-then-loop path shared by main() and tests."""
     write_obligations()
     return run_state.run_training_loop(
-        state, env, exec_batch, draw_perm, eval_and_log, save_latest,
-        write_obligations, stop_requested,
+        state,
+        env,
+        exec_batch,
+        draw_perm,
+        eval_and_log,
+        save_latest,
+        write_obligations,
+        stop_requested,
     )
 
 
@@ -378,11 +410,37 @@ def main():
         help="JSON file with a trusted {seed, global_step, epoch} "
         "record for a legacy-checkpoint boundary resume",
     )
+    ap.add_argument("--device", choices=["auto", "cpu", "mps"], default="auto")
+    ap.add_argument("--eps", type=float, default=1e-8)
+    ap.add_argument("--weight-decay", type=float, default=1.0)
+    ap.add_argument("--num-threads", type=int, default=None)
+    ap.add_argument("--deterministic", action="store_true", default=False)
+    ap.add_argument("--diag", action="store_true", default=False)
     args = ap.parse_args()
 
     run_state.validate_invocation_args(args.steps, args.segment_steps)
 
-    device = get_device()
+    if args.num_threads is not None:
+        torch.set_num_threads(args.num_threads)
+
+    if args.device == "cpu":
+        device = torch.device("cpu")
+    elif args.device == "mps":
+        device = torch.device("mps")
+    else:
+        device = get_device()
+
+    # deterministic setup (fail-fast)
+    det_error = None
+    if args.deterministic:
+        try:
+            torch.use_deterministic_algorithms(True)
+            if not torch.are_deterministic_algorithms_enabled():
+                raise RuntimeError(
+                    "torch.are_deterministic_algorithms_enabled() is False"
+                )
+        except Exception as e:
+            det_error = repr(e)
     seed = args.seed
     run_dir = args.run_dir or os.path.join("runs", "seed%d" % seed)
     csv_path = os.path.join(run_dir, "metrics.csv")
@@ -445,6 +503,77 @@ def main():
         with open(csv_path, "w", newline="") as f:
             csv.writer(f).writerow(run_state.EXPECTED_CSV_HEADER)
 
+    diag_enabled = bool(args.diag)
+    diag_steps_path = os.path.join(run_dir, "diagnostics_steps.csv")
+    diag_evals_path = os.path.join(run_dir, "diagnostics_evals.csv")
+    run_metadata_path = os.path.join(run_dir, "run_metadata.json")
+    if diag_enabled:
+        if not os.path.exists(diag_steps_path):
+            with open(diag_steps_path, "w", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        "step",
+                        "loss",
+                        "grad_norm",
+                        "v_mean",
+                        "v_min",
+                        "v_p50",
+                        "v_zero_frac",
+                        "update_to_weight_ratio",
+                        "weight_norm",
+                        "logit_maxabs",
+                    ]
+                )
+        if not os.path.exists(diag_evals_path):
+            with open(diag_evals_path, "w", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        "step",
+                        "logit_maxabs_train",
+                        "logit_maxabs_val",
+                        "weight_norm",
+                        "state_hash",
+                    ]
+                )
+
+    # deterministic abort handling + run_metadata
+    if det_error is not None:
+        if diag_enabled:
+            meta = {
+                "torch_version": torch.__version__,
+                "python_version": sys.version,
+                "os": os.uname().sysname if hasattr(os, "uname") else os.name,
+                "device": str(device),
+                "num_threads": torch.get_num_threads(),
+                "deterministic": False,
+                "deterministic_error": det_error,
+                "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS"),
+                "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS"),
+                "seed": seed,
+                "flags": vars(args),
+            }
+            with open(run_metadata_path, "w") as f:
+                json.dump(meta, f, indent=2)
+        print("deterministic setup failed: %s" % det_error, flush=True)
+        sys.exit(1)
+
+    if diag_enabled:
+        meta = {
+            "torch_version": torch.__version__,
+            "python_version": sys.version,
+            "os": os.uname().sysname if hasattr(os, "uname") else os.name,
+            "device": str(device),
+            "num_threads": torch.get_num_threads(),
+            "deterministic": bool(args.deterministic),
+            "deterministic_error": None,
+            "OMP_NUM_THREADS": os.environ.get("OMP_NUM_THREADS"),
+            "MKL_NUM_THREADS": os.environ.get("MKL_NUM_THREADS"),
+            "seed": seed,
+            "flags": vars(args),
+        }
+        with open(run_metadata_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
     # Model/optimizer construction consumes RNG; RNG from a resumed checkpoint
     # is restored AFTER construction and before any further sampling.
     torch.manual_seed(seed)
@@ -457,7 +586,11 @@ def main():
         vocab_len=vocab,
     ).to(device)
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=1e-3, weight_decay=1.0, betas=(0.9, 0.98), eps=1e-8
+        model.parameters(),
+        lr=1e-3,
+        weight_decay=args.weight_decay,
+        betas=(0.9, 0.98),
+        eps=args.eps,
     )
 
     if mode == "resume":
@@ -515,7 +648,64 @@ def main():
         logits_rhs = logits[:, :, eq_pos + 1 :]
         loss = F.cross_entropy(logits_rhs, y_rhs, reduction="mean")
         loss.backward()
+
+        # grad norm (pre-step)
+        grad_norm = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                grad_norm += p.grad.detach().float().pow(2).sum().item()
+        grad_norm = grad_norm**0.5
+
+        # snapshot weights before step for update ratio
+        w_before = [p.detach().clone() for p in model.parameters()]
+
         optimizer.step()
+
+        # v stats over exp_avg_sq
+        vs = []
+        for g in optimizer.param_groups:
+            for p in g["params"]:
+                st = optimizer.state.get(p, {})
+                if "exp_avg_sq" in st:
+                    vs.append(st["exp_avg_sq"].detach().reshape(-1))
+        if vs:
+            vcat = torch.cat(vs)
+            v_mean = float(vcat.mean().item())
+            v_min = float(vcat.min().item())
+            v_p50 = float(torch.median(vcat).item())
+            v_zero_frac = float((vcat == 0).float().mean().item())
+        else:
+            v_mean = v_min = v_p50 = v_zero_frac = 0.0
+
+        # update-to-weight ratio
+        update_sq = 0.0
+        wnorm_sq = 0.0
+        for pb, pa in zip(w_before, model.parameters()):
+            diff = (pa.detach() - pb).reshape(-1)
+            update_sq += float(diff.pow(2).sum().item())
+            wnorm_sq += float(pa.detach().reshape(-1).pow(2).sum().item())
+        update_to_weight_ratio = (update_sq**0.5) / (wnorm_sq**0.5 + 1e-12)
+
+        weight_norm = wnorm_sq**0.5
+        logit_maxabs = float(logits.detach().abs().max().item())
+
+        if diag_enabled:
+            with open(diag_steps_path, "a", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        u,
+                        float(loss.item()),
+                        grad_norm,
+                        v_mean,
+                        v_min,
+                        v_p50,
+                        v_zero_frac,
+                        update_to_weight_ratio,
+                        weight_norm,
+                        logit_maxabs,
+                    ]
+                )
+                f.flush()
 
     def eval_and_log(epoch, step):
         tr_loss, tr_acc = full_eval(model, train_data, device)
@@ -529,6 +719,25 @@ def main():
             % (epoch, step, tr_acc, va_acc),
             flush=True,
         )
+        if diag_enabled:
+            # logit maxabs
+            model.eval()
+            with torch.no_grad():
+                xtr = train_data[:, :-1].to(device)
+                xva = val_data[:, :-1].to(device)
+                ltr = model(xtr)
+                lva = model(xva)
+                lm_tr = float(ltr.abs().max().item())
+                lm_va = float(lva.abs().max().item())
+            model.train()
+            wnorm = 0.0
+            for p in model.parameters():
+                wnorm += float(p.detach().reshape(-1).pow(2).sum().item())
+            wnorm = wnorm**0.5
+            sh = canonical_state_hash(model.state_dict())
+            with open(diag_evals_path, "a", newline="") as f:
+                csv.writer(f).writerow([step, lm_tr, lm_va, wnorm, sh])
+                f.flush()
 
     def full_saver_for_view(view):
         rngs = rng_capture()
@@ -574,16 +783,30 @@ def main():
 
     model.train()
     t0 = time.time()
-    reason = continue_with_recovery(
-        state,
-        env,
-        exec_batch,
-        draw_perm,
-        eval_and_log,
-        save_latest,
-        write_obligations,
-        stop_requested=lambda: _stop_requested,
-    )
+    try:
+        reason = continue_with_recovery(
+            state,
+            env,
+            exec_batch,
+            draw_perm,
+            eval_and_log,
+            save_latest,
+            write_obligations,
+            stop_requested=lambda: _stop_requested,
+        )
+    except Exception as e:
+        if diag_enabled:
+            # update run_metadata deterministic_error
+            try:
+                with open(run_metadata_path) as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = {}
+            meta["deterministic_error"] = repr(e)
+            with open(run_metadata_path, "w") as f:
+                json.dump(meta, f, indent=2)
+        print("training aborted: %s" % repr(e), flush=True)
+        sys.exit(1)
 
     elapsed = time.time() - t0
     print(

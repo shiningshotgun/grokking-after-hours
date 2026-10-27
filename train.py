@@ -649,17 +649,21 @@ def main():
         loss = F.cross_entropy(logits_rhs, y_rhs, reduction="mean")
         loss.backward()
 
-        # grad norm (pre-step)
-        grad_norm = 0.0
-        for p in model.parameters():
-            if p.grad is not None:
-                grad_norm += p.grad.detach().float().pow(2).sum().item()
-        grad_norm = grad_norm**0.5
+        if diag_enabled:
+            # grad norm (pre-step)
+            grad_norm = 0.0
+            for p in model.parameters():
+                if p.grad is not None:
+                    grad_norm += p.grad.detach().float().pow(2).sum().item()
+            grad_norm = grad_norm**0.5
 
-        # snapshot weights before step for update ratio
-        w_before = [p.detach().clone() for p in model.parameters()]
+            # snapshot weights before step for update ratio
+            w_before = [p.detach().clone() for p in model.parameters()]
 
         optimizer.step()
+
+        if not diag_enabled:
+            return
 
         # v stats over exp_avg_sq
         vs = []
@@ -689,23 +693,22 @@ def main():
         weight_norm = wnorm_sq**0.5
         logit_maxabs = float(logits.detach().abs().max().item())
 
-        if diag_enabled:
-            with open(diag_steps_path, "a", newline="") as f:
-                csv.writer(f).writerow(
-                    [
-                        u,
-                        float(loss.item()),
-                        grad_norm,
-                        v_mean,
-                        v_min,
-                        v_p50,
-                        v_zero_frac,
-                        update_to_weight_ratio,
-                        weight_norm,
-                        logit_maxabs,
-                    ]
-                )
-                f.flush()
+        with open(diag_steps_path, "a", newline="") as f:
+            csv.writer(f).writerow(
+                [
+                    u,
+                    float(loss.item()),
+                    grad_norm,
+                    v_mean,
+                    v_min,
+                    v_p50,
+                    v_zero_frac,
+                    update_to_weight_ratio,
+                    weight_norm,
+                    logit_maxabs,
+                ]
+            )
+            f.flush()
 
     def eval_and_log(epoch, step):
         tr_loss, tr_acc = full_eval(model, train_data, device)
@@ -802,7 +805,12 @@ def main():
                     meta = json.load(f)
             except Exception:
                 meta = {}
-            meta["deterministic_error"] = repr(e)
+            key = (
+                "deterministic_error"
+                if "deterministic" in repr(e).lower()
+                else "error"
+            )
+            meta[key] = repr(e)
             with open(run_metadata_path, "w") as f:
                 json.dump(meta, f, indent=2)
         print("training aborted: %s" % repr(e), flush=True)

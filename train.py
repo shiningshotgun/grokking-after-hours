@@ -415,6 +415,15 @@ def continue_with_recovery(
     )
 
 
+def tail_eval_due(gs, tail_from, tail_every):
+    """Observational dense-eval cadence. Pure; no trainer state involved."""
+    return (
+        tail_from is not None
+        and gs >= tail_from
+        and (gs - tail_from) % tail_every == 0
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, required=True)
@@ -441,9 +450,25 @@ def main():
         help="include optimizer state in periodic snapshot files "
         "(default: snapshots are weights-only)",
     )
+    ap.add_argument(
+        "--tail-eval-from",
+        type=int,
+        default=None,
+        help="observational only: from this step, also append dense eval rows "
+        "to tail_evals.csv (RNG-guarded; training stream unchanged; "
+        "default: off)",
+    )
+    ap.add_argument(
+        "--tail-eval-every",
+        type=int,
+        default=10,
+        help="step spacing for --tail-eval-from dense eval rows",
+    )
     args = ap.parse_args()
 
     run_state.validate_invocation_args(args.steps, args.segment_steps)
+    if args.tail_eval_every < 1:
+        ap.error("--tail-eval-every must be >= 1")
 
     if args.num_threads is not None:
         torch.set_num_threads(args.num_threads)
@@ -813,6 +838,78 @@ def main():
         optimizer=optimizer,
         save_optimizer_state=args.save_optimizer_state,
     )
+
+    # Observational dense-eval hook (off unless --tail-eval-from is set).
+    # Wraps the per-update obligation writer; the eval is RNG-guarded so the
+    # training stream is unchanged, and rows go to a separate tail_evals.csv.
+    tail_evals_path = os.path.join(run_dir, "tail_evals.csv")
+    tail_state = {"last": None}
+
+    def tail_eval_and_log(gs):
+        if tail_state["last"] is None:
+            tail_state["last"] = 0
+            if os.path.exists(tail_evals_path):
+                with open(tail_evals_path) as f:
+                    prev = [r for r in csv.reader(f) if r and r[0] != "step"]
+                if prev:
+                    tail_state["last"] = int(prev[-1][0])
+        if gs <= tail_state["last"]:
+            return
+        rngs = rng_capture()
+        try:
+            tr_loss, tr_acc = full_eval(model, train_data, device)
+            va_loss, va_acc = full_eval(model, val_data, device)
+            model.eval()
+            with torch.no_grad():
+                xtr = train_data[:, :-1].to(device)
+                xva = val_data[:, :-1].to(device)
+                lm_tr = float(model(xtr).abs().max().item())
+                lm_va = float(model(xva).abs().max().item())
+            model.train()
+            wnorm = 0.0
+            for p in model.parameters():
+                wnorm += float(p.detach().reshape(-1).pow(2).sum().item())
+            wnorm = wnorm**0.5
+            sh = canonical_state_hash(model.state_dict())
+        finally:
+            load_rng(rngs)
+        write_header = not os.path.exists(tail_evals_path)
+        with open(tail_evals_path, "a", newline="") as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(
+                    [
+                        "step",
+                        "train_loss",
+                        "train_acc",
+                        "val_loss",
+                        "val_acc",
+                        "logit_maxabs_train",
+                        "logit_maxabs_val",
+                        "weight_norm",
+                        "state_hash",
+                    ]
+                )
+            w.writerow(
+                [gs, tr_loss, tr_acc, va_loss, va_acc, lm_tr, lm_va, wnorm, sh]
+            )
+            f.flush()
+        print(
+            "tail eval step %d train_acc %.2f val_acc %.2f" % (gs, tr_acc, va_acc),
+            flush=True,
+        )
+        tail_state["last"] = gs
+
+    base_write_obligations = write_obligations
+
+    def write_obligations_with_tail():
+        base_write_obligations()
+        if tail_eval_due(
+            state.global_step, args.tail_eval_from, args.tail_eval_every
+        ):
+            tail_eval_and_log(state.global_step)
+
+    write_obligations = write_obligations_with_tail
 
     if args.segment_steps is not None:
         target_steps = min(args.steps, state.global_step + args.segment_steps)

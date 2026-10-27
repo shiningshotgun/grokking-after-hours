@@ -344,9 +344,22 @@ def make_full_saver(
 
 
 def make_obligation_writer(
-    state, model, run_dir, snap_dir, seed, n_batches, full_saver_for_view
+    state,
+    model,
+    run_dir,
+    snap_dir,
+    seed,
+    n_batches,
+    full_saver_for_view,
+    optimizer=None,
+    save_optimizer_state=False,
 ):
-    """Production artifact-obligation writer (model-only snapshots + seed0/2000)."""
+    """Production artifact-obligation writer (snapshots + seed0/2000).
+
+    Snapshots are weights-only by default; with save_optimizer_state each
+    snapshot also carries optimizer_state for post-hoc optimizer analysis.
+    Snapshots remain non-resume artifacts either way (no checkpoint_type).
+    """
 
     def write_obligations():
         gs = state.global_step
@@ -355,9 +368,14 @@ def make_obligation_writer(
             if not os.path.exists(sp):
 
                 def _snap(p):
-                    torch.save(
-                        {"state_dict": model.state_dict(), "step": gs, "seed": seed}, p
-                    )
+                    payload = {"state_dict": model.state_dict(), "step": gs, "seed": seed}
+                    if save_optimizer_state:
+                        if optimizer is None:
+                            raise RuntimeError(
+                                "save_optimizer_state requires an optimizer"
+                            )
+                        payload["optimizer_state"] = optimizer.state_dict()
+                    torch.save(payload, p)
 
                 _atomic_save(_snap, sp)
                 print("saved snapshot %s" % sp, flush=True)
@@ -416,6 +434,13 @@ def main():
     ap.add_argument("--num-threads", type=int, default=None)
     ap.add_argument("--deterministic", action="store_true", default=False)
     ap.add_argument("--diag", action="store_true", default=False)
+    ap.add_argument(
+        "--save-optimizer-state",
+        action="store_true",
+        default=False,
+        help="include optimizer state in periodic snapshot files "
+        "(default: snapshots are weights-only)",
+    )
     args = ap.parse_args()
 
     run_state.validate_invocation_args(args.steps, args.segment_steps)
@@ -456,7 +481,17 @@ def main():
     vocab = len(tokens)
     cfg_hash = hash_config_split(train_data, val_data)
     tok_hash = tokenizer_hash(tokens)
-    identity = run_state.build_run_identity(seed, vocab, cfg_hash, tok_hash)
+    # Record the ACTUAL optimizer settings of this invocation (eps and
+    # weight-decay are CLI args); the resume guard compares checkpoints
+    # against this identity, so provenance must reflect the real arguments.
+    actual_optimizer = dict(
+        run_state.EXPECTED_OPTIMIZER,
+        weight_decay=args.weight_decay,
+        eps=args.eps,
+    )
+    identity = run_state.build_run_identity(
+        seed, vocab, cfg_hash, tok_hash, optimizer=actual_optimizer
+    )
     n_train = len(train_data)
     batch_size = 512
     n_batches = (n_train + batch_size - 1) // batch_size
@@ -768,7 +803,15 @@ def main():
         )
 
     write_obligations = make_obligation_writer(
-        state, model, run_dir, snap_dir, seed, n_batches, full_saver_for_view
+        state,
+        model,
+        run_dir,
+        snap_dir,
+        seed,
+        n_batches,
+        full_saver_for_view,
+        optimizer=optimizer,
+        save_optimizer_state=args.save_optimizer_state,
     )
 
     if args.segment_steps is not None:

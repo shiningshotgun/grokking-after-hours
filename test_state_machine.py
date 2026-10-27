@@ -820,6 +820,33 @@ class TestCurrentSchemaValidation(unittest.TestCase):
     def test_missing_permutation_mid_epoch_rejected(self):
         self.mutate_reject(lambda c: c.__setitem__("epoch_permutation", None))
 
+    def test_optimizer_value_mismatch_rejected(self):
+        # A checkpoint recorded under different optimizer settings must not
+        # resume silently against a default-args invocation.
+        def mutate(c):
+            settings = dict(c["optimizer_settings"])
+            settings["eps"] = 1e-4
+            c["optimizer_settings"] = settings
+
+        self.mutate_reject(mutate)
+
+    def test_run_identity_records_actual_optimizer_settings(self):
+        actual = dict(run_state.EXPECTED_OPTIMIZER, eps=1e-4, weight_decay=0.1)
+        ident = run_state.build_run_identity(
+            1, 239, "cfg-hash-test", "tok-hash-test", optimizer=actual
+        )
+        self.assertEqual(ident["optimizer"]["eps"], 1e-4)
+        self.assertEqual(ident["optimizer"]["weight_decay"], 0.1)
+        default_ident = run_state.build_run_identity(
+            1, 239, "cfg-hash-test", "tok-hash-test"
+        )
+        self.assertEqual(
+            default_ident["optimizer"], run_state.EXPECTED_OPTIMIZER
+        )
+        self.assertNotEqual(
+            ident["run_identity_hash"], default_ident["run_identity_hash"]
+        )
+
     def test_unknown_future_schema_rejected(self):
         ckpt = self.valid_ckpt()
         ckpt["schema_version"] = 3
@@ -1649,6 +1676,66 @@ class TestObligationWriterReal(unittest.TestCase):
             writer()
             self.assertEqual(os.path.getsize(snap), snap_size)
             self.assertEqual(os.path.getsize(backup), backup_size)
+
+    def test_snapshot_optimizer_state_only_when_requested(self):
+        with TempDirs() as tmp:
+            run_dir = os.path.join(tmp, "seed0")
+            snap_dir = os.path.join(run_dir, "snapshots")
+            os.makedirs(snap_dir)
+            state = make_state(
+                epoch=200,
+                current_perm=None,
+                batch_cursor=0,
+                global_step=2000,
+                next_eval_epoch=201,
+            )
+            model = FakeModel()
+            opt = FakeOpt()
+            exp = make_exp()
+
+            def full_saver_for_view(view):
+                rngs = train.rng_capture()
+                return train.make_full_saver(
+                    state,
+                    model,
+                    opt,
+                    view,
+                    torch.device("cpu"),
+                    rngs,
+                    "cfg-hash-test",
+                    "tok-hash-test",
+                    exp["identity"],
+                    10,
+                    0,
+                    239,
+                )
+
+            # Default: weights-only snapshot, no optimizer_state key.
+            writer = train.make_obligation_writer(
+                state, model, run_dir, snap_dir, 0, 10, full_saver_for_view
+            )
+            writer()
+            snap = os.path.join(snap_dir, "snapshot_step2000.pt")
+            payload = torch.load(snap, weights_only=True)
+            self.assertNotIn("optimizer_state", payload)
+
+            os.remove(snap)
+
+            # Requested: snapshot carries the optimizer state.
+            writer = train.make_obligation_writer(
+                state,
+                model,
+                run_dir,
+                snap_dir,
+                0,
+                10,
+                full_saver_for_view,
+                optimizer=opt,
+                save_optimizer_state=True,
+            )
+            writer()
+            payload = torch.load(snap, weights_only=True)
+            self.assertEqual(payload["optimizer_state"], {"state": {"lr": 1e-3}})
 
 
 # ---------------------------------------------------------------------------

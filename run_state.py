@@ -142,14 +142,17 @@ def identity_hash(identity):
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
-def build_run_identity(seed, vocab, cfg_hash, tok_hash):
+def build_run_identity(seed, vocab, cfg_hash, tok_hash, optimizer=None):
+    """Build the run identity. `optimizer` must be the ACTUAL optimizer
+    settings of this invocation; when omitted, the documented defaults are
+    used (valid only for a default invocation)."""
     ident = {
         "seed": seed,
         "modulus": EXPECTED_MODULUS,
         "train_pct": EXPECTED_TRAIN_PCT,
         "architecture": dict(EXPECTED_ARCHITECTURE, vocab_len=vocab),
         "loss_masking": EXPECTED_LOSS_MASKING,
-        "optimizer": EXPECTED_OPTIMIZER,
+        "optimizer": dict(EXPECTED_OPTIMIZER) if optimizer is None else dict(optimizer),
         "sampler": EXPECTED_SAMPLER,
         "config_split_hash": cfg_hash,
         "tokenizer_hash": tok_hash,

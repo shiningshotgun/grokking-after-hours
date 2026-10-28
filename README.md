@@ -1,5 +1,21 @@
 # Grokking reproduction: modular division (x / y mod 97)
 
+## The one-minute version
+
+Three seeds of a 2-layer transformer learn x / y mod 97 the grokking way:
+thousands of memorization steps, then sudden generalization (first 100%
+validation at steps 4,300 / 5,020 / 11,430). Training then stays unstable:
+at the measured 100,000-step endpoints, one seed's validation accuracy is
+28.7% while the other two measure 100% and 99.98% (mean 76.24%).
+The cause of that late instability is not established; RESULTS.md separates
+what is measured from what is not.
+
+![Validation accuracy over training for all three seeds](plots/accuracy_curves.png)
+
+Measured results, definitions and limitations: [RESULTS.md](RESULTS.md).
+What building this taught me: [what_this_taught_me.md](what_this_taught_me.md).
+
+
 A from-scratch reimplementation of one experiment from Power et al., 2022,
 "Grokking: Generalization Beyond Overfitting on Small Algorithmic Datasets"
 (https://arxiv.org/abs/2201.02177), following the paper's default configuration

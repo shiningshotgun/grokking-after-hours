@@ -1,0 +1,22 @@
+########## CONTROL (seed1 eps 1e-8, byte-identical replay) ##########
+first >=99% val crossing: step 4570
+  2.0pt: n=26 median_depth=29.16 open=1 (open onset step 82840, depth 75.3, last eval 98950)
+  5.0pt: n=25 median_depth=31.27 open=1 (open onset step 86170, depth 75.3, last eval 98950)
+  10.0pt: n=23 median_depth=41.71 open=1 (open onset step 86170, depth 75.3, last eval 98950)
+  deepest 5pt episode: 93.9pt at step 30320..30920
+  float32 CE saturation probe: loss floor min=0.009881, steps below 1e-6: 0
+  update_to_weight_ratio: overall median 0.00143; 50-steps-pre-onset median 0.00217 (n=1250) - DESCRIPTIVE
+  grad_norm p95=51.48; 5pt-episode onsets with >p95 grad_norm in prior 50 steps: 17/25 - DESCRIPTIVE count, no pre-specified null
+
+########## ARM A (seed1 eps 1e-4) ##########
+first >=99% val crossing: step 2300
+  2.0pt: n=25 median_depth=25.77 open=1 (open onset step 19330, depth 99.1, last eval 98950)
+  5.0pt: n=20 median_depth=36.29 open=1 (open onset step 19330, depth 99.1, last eval 98950)
+  10.0pt: n=18 median_depth=38.83 open=1 (open onset step 19330, depth 99.1, last eval 98950)
+  deepest 5pt episode: 99.1pt at step 19330..98950
+  float32 CE saturation probe: loss floor min=0.0161, steps below 1e-6: 0
+  update_to_weight_ratio: overall median 0.00245; 50-steps-pre-onset median 0.0013 (n=1000) - DESCRIPTIVE
+  grad_norm p95=257.6; 5pt-episode onsets with >p95 grad_norm in prior 50 steps: 1/20 - DESCRIPTIVE count, no pre-specified null
+
+DENSE TAIL (98950..100000, 106 rows): val_acc first=38.53 last=25.24 min=10.91 max=45.81
+  final eval step 100000: train_acc=31.64 val_acc=25.24

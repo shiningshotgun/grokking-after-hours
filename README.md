@@ -52,6 +52,10 @@ RESULTS.md               measured results, definitions, limitations
 PILOT.md                 pilot-run throughput/storage report
 ```
 
+## Stage C follow-up: the instability investigation
+
+The late-training instability documented in this repo was investigated further on a deterministic CPU harness (seed 1): the post-grokking dips reproduce under a fully deterministic control run, and an epsilon 1e-4 arm did not fix them - under eps 1e-4 the run collapsed earlier and stayed collapsed for the rest of its recorded evaluations. The write-up, the exact analysis script, and its machine output live in analysis/stagec_arm_a/. One seed per condition, descriptive only - the cause is not established.
+
 ## Setup
 
 Recorded environment (what was actually used; see `requirements.txt`):
